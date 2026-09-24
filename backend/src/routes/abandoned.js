@@ -17,13 +17,33 @@ router.get('/', async (req, res) => {
   // Mark them as abandoned now that they've been surfaced (idempotent to re-run)
   await Cart.updateMany({ _id: { $in: carts.map(c => c._id) } }, { status: 'abandoned' });
 
-  res.json(carts.map(c => ({
-    id: c.id,
-    contact: c.contact,
-    items: c.items.filter(i => i.product).map(i => ({ name: i.product.name, qty: i.qty, price: i.product.price })),
-    updatedAt: c.updatedAt,
-    recoveryMessagesSent: c.recoveryMessagesSent,
-  })));
+  res.json(carts.map(c => {
+    const items = c.items.filter(i => i.product).map(i => ({ name: i.product.name, qty: i.qty, price: i.product.price }));
+    const value = items.reduce((s, i) => s + i.price * i.qty, 0);
+    const firstName = (c.contact.name || '').split(' ')[0] || 'there';
+    const itemList = items.map(i => i.name).join(', ');
+
+    // Dynamic, rule-based message templating — escalates gently with each
+    // follow-up. Not a live AI/LLM call (see the note on the admin page).
+    let suggestedMessage;
+    if (c.recoveryMessagesSent === 0) {
+      suggestedMessage = `Hi ${firstName}! We noticed you left ${itemList} in your Craft Lab cart. Still thinking it over? Happy to answer any questions — just reply here.`;
+    } else if (c.recoveryMessagesSent === 1) {
+      suggestedMessage = `Hi ${firstName}, your ${itemList} is still saved for you. Complete your order in the next 24 hours and use code COMEBACK5 for 5% off.`;
+    } else {
+      suggestedMessage = `Hi ${firstName}, last call on your Craft Lab cart (${itemList}) — use code COMEBACK10 for 10% off if you complete it today.`;
+    }
+
+    return {
+      id: c.id,
+      contact: c.contact,
+      items,
+      value,
+      updatedAt: c.updatedAt,
+      recoveryMessagesSent: c.recoveryMessagesSent,
+      suggestedMessage,
+    };
+  }));
 });
 
 // POST /api/admin/abandoned-carts/:id/mark-contacted — logs a manual WhatsApp/email follow-up

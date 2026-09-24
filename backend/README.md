@@ -4,12 +4,15 @@ Production e-commerce backend: Node.js + Express + MongoDB + Razorpay.
 
 ## What's real here
 
-- Real MongoDB persistence (Product, Order, Cart, Coupon, Admin, AuditLog)
+- Real MongoDB persistence (Product, Order, Cart, Coupon, Admin, **Customer, Supplier**, AuditLog)
 - Real Razorpay order creation + **server-side signature verification** (never trusts the frontend alone)
 - Real Razorpay **webhook** handler (independent confirmation, idempotent — safe if it fires twice)
 - Atomic stock reservation to prevent overselling when two customers check out the same low-stock item at once
 - JWT-based admin login with bcrypt-hashed passwords (not a shared API key — this handles real customer money)
-- Abandoned-cart capture (with consent) and admin recovery tracking
+- **Customer accounts** — signup/login with their own JWT namespace (separate from admin tokens, so a customer token can never access admin routes), order history, optional address book
+- **Public order tracking** — customers can check status with just order number + email, no login required
+- **Supplier/manufacturer records** — simple CRM for who makes/supplies each product
+- Abandoned-cart capture (with consent) and **dynamic, rule-based recovery messaging** (escalating discount codes, personalized by name/items) — not a live AI call, see the note on the admin page
 - Rate limiting, Helmet security headers, CORS allowlist
 
 ## 1. Get MongoDB Atlas (same steps as before, new database)
@@ -81,6 +84,9 @@ Root Directory: `backend` (or blank if you upload only this folder's contents �
 - `POST /api/webhooks/razorpay` — server-to-server payment confirmation
 - `POST /api/coupons/validate`
 - `POST /api/auth/login` — admin login
+- `GET /api/track?orderNumber=&email=` — public order status lookup
+- `POST /api/customers/signup`, `POST /api/customers/login`
+- `GET/PUT /api/customers/me`, `GET /api/customers/me/orders` (require customer Bearer token)
 
 **Admin (require `Authorization: Bearer <token>` from login)**
 - `GET/POST/PUT/DELETE /api/admin/products`
@@ -89,6 +95,8 @@ Root Directory: `backend` (or blank if you upload only this folder's contents �
 - `GET/POST/PUT/DELETE /api/admin/coupons`
 - `GET /api/admin/abandoned-carts`, `POST /api/admin/abandoned-carts/:id/mark-contacted`
 - `GET /api/admin/dashboard/today`, `GET /api/admin/dashboard/analytics`
+- `GET /api/admin/customers`, `GET /api/admin/customers/:id`, `PUT /api/admin/customers/:id/status`
+- `GET/POST/PUT/DELETE /api/admin/suppliers`
 
 ## What's still missing (by design — see the launch guide)
 

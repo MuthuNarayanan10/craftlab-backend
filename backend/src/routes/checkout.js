@@ -4,6 +4,7 @@ const Product = require('../models/Product');
 const Cart = require('../models/Cart');
 const Order = require('../models/Order');
 const Coupon = require('../models/Coupon');
+const jwt = require('jsonwebtoken');
 const generateOrderNumber = require('../utils/generateOrderNumber');
 const { createRazorpayOrder } = require('../utils/razorpay');
 
@@ -39,7 +40,18 @@ async function validateCoupon(code, subtotal) {
 
 // POST /api/checkout
 router.post('/', async (req, res) => {
-  const { cartId, customer, address, couponCode } = req.body;
+  // If the customer is logged in, link this order to their account —
+  // but checkout still works fine for guests with no token at all.
+  let customerId = null;
+  const authHeader = req.header('Authorization') || '';
+  if (authHeader.startsWith('Bearer ')) {
+    try {
+      const payload = jwt.verify(authHeader.slice(7), process.env.JWT_SECRET);
+      if (payload.type === 'customer') customerId = payload.sub;
+    } catch (e) { /* invalid/expired token on checkout just falls back to guest — not an error */ }
+  }
+
+  const { cartId, customer, address, couponCode, giftMessage } = req.body;
   if (!customer?.name || !customer?.phone || !customer?.email) {
     return res.status(400).json({ error: 'Customer name, phone and email are required' });
   }
@@ -74,6 +86,7 @@ router.post('/', async (req, res) => {
     const orderNumber = await generateOrderNumber();
     const order = await Order.create({
       orderNumber,
+      customerId,
       customer,
       address,
       items: cart.items.map(i => ({
@@ -90,6 +103,7 @@ router.post('/', async (req, res) => {
       couponCode: coupon ? coupon.code : '',
       total,
       cartId,
+      giftMessage: giftMessage || '',
     });
 
     const razorpayOrder = await createRazorpayOrder(total, order.orderNumber);

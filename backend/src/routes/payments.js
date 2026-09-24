@@ -5,6 +5,8 @@ const Product = require('../models/Product');
 const Cart = require('../models/Cart');
 const { verifyPaymentSignature, verifyWebhookSignature } = require('../utils/razorpay');
 const { logAction } = require('../models/AuditLog');
+const { createNotification } = require('../models/Notification');
+const { sendEmail, orderConfirmationEmail } = require('../utils/email');
 
 /** Marks an order paid and permanently deducts stock. Idempotent — if the
  *  order is already Paid (e.g. the callback AND the webhook both fire for
@@ -21,16 +23,29 @@ async function markOrderPaid(order, { razorpay_payment_id, razorpay_signature, m
   order.payment.verifiedVia = via;
   await order.save();
 
-  // Convert reservation into a permanent stock deduction.
+  // Convert reservation into a permanent stock deduction, and flag any
+  // product that's now below its low-stock threshold.
   for (const item of order.items) {
-    await Product.findByIdAndUpdate(item.product, { $inc: { stock: -item.qty, reserved: -item.qty } });
+    const updated = await Product.findByIdAndUpdate(
+      item.product,
+      { $inc: { stock: -item.qty, reserved: -item.qty } },
+      { new: true }
+    );
+    if (updated && updated.stock <= updated.lowStockThreshold) {
+      await createNotification('low_stock', `${updated.name} is low on stock (${updated.stock} left)`, { productId: updated.id });
+    }
   }
 
   if (order.cartId) {
     await Cart.findOneAndUpdate({ cartId: order.cartId }, { status: 'converted', convertedToOrder: order._id });
   }
 
+  await createNotification('new_order', `New order ${order.orderNumber} — ₹${order.total}`, { orderNumber: order.orderNumber });
   await logAction('order.paid', via, { orderNumber: order.orderNumber, paymentId: razorpay_payment_id });
+
+  const { subject, html } = orderConfirmationEmail(order);
+  sendEmail(order.customer.email, subject, html); // fire-and-forget — never blocks the response
+
   return order;
 }
 
@@ -82,6 +97,7 @@ router.post('/razorpay', async (req, res) => {
     if (order && order.paymentStatus !== 'Paid') {
       order.paymentStatus = 'Failed';
       await order.save();
+      await createNotification('payment_failed', `Payment failed for order ${order.orderNumber}`, { orderNumber: order.orderNumber });
       await logAction('order.payment_failed', 'webhook', { orderNumber: order.orderNumber });
     }
   }

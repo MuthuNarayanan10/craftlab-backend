@@ -11,11 +11,12 @@ const orderItemSchema = new mongoose.Schema({
 
 const orderSchema = new mongoose.Schema({
   orderNumber: { type: String, required: true, unique: true }, // e.g. CL-1001
+  customerId: { type: mongoose.Schema.Types.ObjectId, ref: 'Customer', default: null }, // null = guest checkout
 
   customer: {
     name: { type: String, required: true },
     phone: { type: String, required: true },
-    email: { type: String, required: true },
+    email: { type: String, required: true, lowercase: true, trim: true },
   },
   address: {
     line1: { type: String, required: true },
@@ -27,6 +28,7 @@ const orderSchema = new mongoose.Schema({
   },
 
   items: [orderItemSchema],
+  giftMessage: { type: String, default: '' },
 
   subtotal: { type: Number, required: true },
   shipping: { type: Number, default: 0 },

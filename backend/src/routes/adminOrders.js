@@ -3,6 +3,7 @@ const router = express.Router();
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const { logAction } = require('../models/AuditLog');
+const { sendEmail, orderStatusEmail } = require('../utils/email');
 
 // GET /api/admin/orders?status=Paid
 router.get('/', async (req, res) => {
@@ -37,6 +38,12 @@ router.put('/:id/status', async (req, res) => {
 
   await order.save();
   await logAction('order.status_changed', req.admin.email, { orderNumber: order.orderNumber, from: previous, to: orderStatus });
+
+  if (['Dispatched', 'Delivered', 'Cancelled'].includes(orderStatus)) {
+    const { subject, html } = orderStatusEmail(order);
+    sendEmail(order.customer.email, subject, html); // fire-and-forget
+  }
+
   res.json(order);
 });
 

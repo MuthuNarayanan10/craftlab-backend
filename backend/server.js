@@ -17,6 +17,13 @@ const couponRoutes = require('./src/routes/coupons');
 const adminCouponRoutes = require('./src/routes/adminCoupons');
 const abandonedRoutes = require('./src/routes/abandoned');
 const dashboardRoutes = require('./src/routes/dashboard');
+const trackRoutes = require('./src/routes/track');
+const customerAuthRoutes = require('./src/routes/customerAuth');
+const adminCustomerRoutes = require('./src/routes/adminCustomers');
+const adminSupplierRoutes = require('./src/routes/adminSuppliers');
+const returnsRoutes = require('./src/routes/returns');
+const adminReturnsRoutes = require('./src/routes/adminReturns');
+const adminNotificationsRoutes = require('./src/routes/adminNotifications');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -38,6 +45,8 @@ const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 300 });
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
 app.use('/api/', generalLimiter);
 app.use('/api/auth/login', authLimiter);
+app.use('/api/customers/login', authLimiter);
+app.use('/api/customers/signup', authLimiter);
 
 // IMPORTANT: the Razorpay webhook needs the raw request body to verify its
 // signature, so it must be mounted with express.raw() BEFORE the global
@@ -56,6 +65,9 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/checkout', checkoutRoutes);
 app.use('/api/payments', paymentRoutes); // /verify — public callback, but signature-verified inside
 app.use('/api/coupons', couponRoutes);   // /validate only
+app.use('/api/track', trackRoutes);      // public order tracking (requires order number + email)
+app.use('/api/customers', customerAuthRoutes); // signup/login/me — customer JWT, separate from admin
+app.use('/api/returns', returnsRoutes); // customer-facing return requests (requires customer login)
 
 // --- Admin routes (everything below requires a valid admin JWT) ---
 app.use('/api/admin/products', requireAdmin, adminProductRoutes);
@@ -63,6 +75,10 @@ app.use('/api/admin/orders', requireAdmin, adminOrderRoutes);
 app.use('/api/admin/coupons', requireAdmin, adminCouponRoutes);
 app.use('/api/admin/abandoned-carts', requireAdmin, abandonedRoutes);
 app.use('/api/admin/dashboard', requireAdmin, dashboardRoutes);
+app.use('/api/admin/customers', requireAdmin, adminCustomerRoutes);
+app.use('/api/admin/suppliers', requireAdmin, adminSupplierRoutes);
+app.use('/api/admin/returns', requireAdmin, adminReturnsRoutes);
+app.use('/api/admin/notifications', requireAdmin, adminNotificationsRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

@@ -1,0 +1,38 @@
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+
+const addressSchema = new mongoose.Schema({
+  label: { type: String, default: 'Home' },
+  line1: { type: String, required: true },
+  line2: { type: String, default: '' },
+  city: { type: String, required: true },
+  state: { type: String, required: true },
+  pincode: { type: String, required: true },
+  country: { type: String, default: 'India' },
+}, { _id: true });
+
+const customerSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+  phone: { type: String, default: '' },
+  passwordHash: { type: String, required: true },
+  addresses: [addressSchema],
+  status: { type: String, enum: ['active', 'blocked'], default: 'active' },
+}, { timestamps: true });
+
+customerSchema.methods.setPassword = async function (plainPassword) {
+  this.passwordHash = await bcrypt.hash(plainPassword, 12);
+};
+customerSchema.methods.checkPassword = function (plainPassword) {
+  return bcrypt.compare(plainPassword, this.passwordHash);
+};
+customerSchema.methods.toJSON = function () {
+  const obj = this.toObject();
+  obj.id = obj._id.toString();
+  delete obj._id;
+  delete obj.__v;
+  delete obj.passwordHash;
+  return obj;
+};
+
+module.exports = mongoose.model('Customer', customerSchema);

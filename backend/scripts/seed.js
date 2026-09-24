@@ -2,6 +2,7 @@ require('dotenv').config();
 const connectDB = require('../src/db');
 const Admin = require('../src/models/Admin');
 const Product = require('../src/models/Product');
+const Coupon = require('../src/models/Coupon');
 
 async function seed() {
   await connectDB();
@@ -100,6 +101,17 @@ async function seed() {
       await Product.create(p);
       console.log(`✅ Created product: ${p.name} (${p.sku})`);
     }
+  }
+
+  // --- Abandoned-cart recovery coupons (referenced by the dynamic recovery message templates) ---
+  const recoveryCoupons = [
+    { code: 'COMEBACK5', type: 'percentage', value: 5, minOrderValue: 0 },
+    { code: 'COMEBACK10', type: 'percentage', value: 10, minOrderValue: 0 },
+  ];
+  for (const c of recoveryCoupons) {
+    const existing = await Coupon.findOne({ code: c.code });
+    if (!existing) { await Coupon.create(c); console.log(`✅ Created coupon: ${c.code}`); }
+    else console.log(`ℹ️  Coupon ${c.code} already exists — skipping.`);
   }
 
   console.log('\n✅ Product images are pre-linked to files bundled in frontend/images/ — no upload needed to launch.');
