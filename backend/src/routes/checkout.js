@@ -84,27 +84,49 @@ router.post('/', async (req, res) => {
     const total = subtotal + FLAT_SHIPPING - discount;
 
     const orderNumber = await generateOrderNumber();
-    const order = await Order.create({
-      orderNumber,
-      customerId,
-      customer,
-      address,
-      items: cart.items.map(i => ({
-        product: i.product._id,
-        name: i.product.name,
-        sku: i.product.sku,
-        price: i.product.price,
-        qty: i.qty,
-        image: i.product.images?.[0] || '',
-      })),
-      subtotal,
-      shipping: FLAT_SHIPPING,
-      discount,
-      couponCode: coupon ? coupon.code : '',
-      total,
-      cartId,
-      giftMessage: giftMessage || '',
-    });
+    let order;
+    try {
+      order = await Order.create({
+        orderNumber,
+        customerId,
+        customer,
+        address,
+        items: cart.items.map(i => ({
+          product: i.product._id,
+          name: i.product.name,
+          sku: i.product.sku,
+          price: i.product.price,
+          qty: i.qty,
+          image: i.product.images?.[0] || '',
+        })),
+        subtotal,
+        shipping: FLAT_SHIPPING,
+        discount,
+        couponCode: coupon ? coupon.code : '',
+        total,
+        cartId,
+        giftMessage: giftMessage || '',
+      });
+    } catch (createErr) {
+      // Defense in depth: the atomic counter (models/Counter.js) already
+      // prevents duplicate order numbers, but if this ever fires anyway
+      // (e.g. manual DB edits during testing), retry once with a fresh number
+      // instead of failing the customer's checkout outright.
+      if (createErr.code === 11000) {
+        const retryNumber = await generateOrderNumber();
+        order = await Order.create({
+          orderNumber: retryNumber, customerId, customer, address,
+          items: cart.items.map(i => ({
+            product: i.product._id, name: i.product.name, sku: i.product.sku,
+            price: i.product.price, qty: i.qty, image: i.product.images?.[0] || '',
+          })),
+          subtotal, shipping: FLAT_SHIPPING, discount,
+          couponCode: coupon ? coupon.code : '', total, cartId, giftMessage: giftMessage || '',
+        });
+      } else {
+        throw createErr;
+      }
+    }
 
     const razorpayOrder = await createRazorpayOrder(total, order.orderNumber);
     order.payment.razorpayOrderId = razorpayOrder.id;
