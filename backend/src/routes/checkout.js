@@ -1,16 +1,38 @@
+
 const express = require('express');
 const router = express.Router();
+
 const Product = require('../models/Product');
 const Cart = require('../models/Cart');
 const Order = require('../models/Order');
 const Coupon = require('../models/Coupon');
 const jwt = require('jsonwebtoken');
+
 const generateOrderNumber = require('../utils/generateOrderNumber');
 const { createRazorpayOrder } = require('../utils/razorpay');
 
 const FLAT_SHIPPING = 0;
 
-// Atomically reserve stock to prevent overselling.
+// --------------------------------------------------
+// ERROR HANDLING
+// --------------------------------------------------
+
+function getErrorMessage(err) {
+  if (err instanceof Error && err.message) {
+    return err.message;
+  }
+
+  if (typeof err === 'string' && err) {
+    return err;
+  }
+
+  return 'Unknown checkout error';
+}
+
+// --------------------------------------------------
+// STOCK MANAGEMENT
+// --------------------------------------------------
+
 async function reserveStock(productId, qty) {
   const result = await Product.findOneAndUpdate(
     {
@@ -22,57 +44,111 @@ async function reserveStock(productId, qty) {
         ],
       },
     },
-    { $inc: { reserved: qty } },
-    { new: true }
+    {
+      $inc: { reserved: qty },
+    },
+    {
+      new: true,
+    }
   );
 
   return !!result;
 }
 
-// Release reserved stock.
 async function releaseStock(productId, qty) {
-  await Product.findByIdAndUpdate(
-    productId,
-    { $inc: { reserved: -qty } }
+  await Product.findOneAndUpdate(
+    {
+      _id: productId,
+      reserved: { $gte: qty },
+    },
+    {
+      $inc: { reserved: -qty },
+    }
   );
 }
 
-// Validate coupon and calculate discount.
+// Best-effort stock rollback.
+// Each reservation is attempted independently.
+async function rollbackStock(reserved) {
+  for (const reservation of reserved) {
+    try {
+      await releaseStock(
+        reservation.productId,
+        reservation.qty
+      );
+    } catch (err) {
+      console.error('Stock rollback failed:', {
+        productId: String(reservation.productId),
+        message: getErrorMessage(err),
+      });
+    }
+  }
+}
+
+// --------------------------------------------------
+// COUPON VALIDATION
+// --------------------------------------------------
+
 async function validateCoupon(code, subtotal) {
-  if (!code) {
-    return { discount: 0, coupon: null };
+  if (!code || !String(code).trim()) {
+    return {
+      discount: 0,
+      coupon: null,
+    };
   }
 
+  const normalizedCode = String(code)
+    .trim()
+    .toUpperCase();
+
   const coupon = await Coupon.findOne({
-    code: code.toUpperCase(),
+    code: normalizedCode,
     active: true,
   });
 
   if (!coupon) {
-    throw new Error('Invalid coupon code');
+    const err = new Error('Invalid coupon code');
+    err.statusCode = 400;
+    throw err;
   }
 
-  if (coupon.expiresAt && coupon.expiresAt < new Date()) {
-    throw new Error('Coupon has expired');
+  if (
+    coupon.expiresAt &&
+    new Date(coupon.expiresAt) < new Date()
+  ) {
+    const err = new Error('Coupon has expired');
+    err.statusCode = 400;
+    throw err;
   }
 
   if (
     coupon.usageLimit !== null &&
+    coupon.usageLimit !== undefined &&
     coupon.usedCount >= coupon.usageLimit
   ) {
-    throw new Error('Coupon usage limit reached');
+    const err = new Error('Coupon usage limit reached');
+    err.statusCode = 400;
+    throw err;
   }
 
-  if (subtotal < coupon.minOrderValue) {
-    throw new Error(
+  if (subtotal < (coupon.minOrderValue || 0)) {
+    const err = new Error(
       `Minimum order value for this coupon is ₹${coupon.minOrderValue}`
     );
+
+    err.statusCode = 400;
+    throw err;
   }
 
-  const discount =
-    coupon.type === 'percentage'
-      ? Math.round(subtotal * (coupon.value / 100))
-      : coupon.value;
+  let discount = 0;
+
+  if (coupon.type === 'percentage') {
+    discount = Math.round(
+      subtotal * (coupon.value / 100)
+    );
+  } else {
+    discount = coupon.value;
+  }
 
   return {
     discount: Math.min(discount, subtotal),
@@ -80,17 +156,26 @@ async function validateCoupon(code, subtotal) {
   };
 }
 
+// --------------------------------------------------
 // POST /api/checkout
+// --------------------------------------------------
+
 router.post('/', async (req, res, next) => {
   const reserved = [];
+
   let order = null;
   let coupon = null;
+  let razorpayOrderCreated = false;
 
   try {
-    // Guest checkout is supported.
+    // ------------------------------------------------
+    // 1. CUSTOMER AUTHENTICATION
+    // ------------------------------------------------
+
     let customerId = null;
 
-    const authHeader = req.header('Authorization') || '';
+    const authHeader =
+      req.header('Authorization') || '';
 
     if (authHeader.startsWith('Bearer ')) {
       try {
@@ -102,10 +187,14 @@ router.post('/', async (req, res, next) => {
         if (payload.type === 'customer') {
           customerId = payload.sub;
         }
-      } catch (e) {
+      } catch (authErr) {
         // Invalid or expired token falls back to guest checkout.
       }
     }
+
+    // ------------------------------------------------
+    // 2. REQUEST VALIDATION
+    // ------------------------------------------------
 
     const {
       cartId,
@@ -115,18 +204,17 @@ router.post('/', async (req, res, next) => {
       giftMessage,
     } = req.body || {};
 
-    // Validate customer.
     if (
       !customer?.name ||
       !customer?.phone ||
       !customer?.email
     ) {
       return res.status(400).json({
-        error: 'Customer name, phone and email are required',
+        error:
+          'Customer name, phone and email are required',
       });
     }
 
-    // Validate address.
     if (
       !address?.line1 ||
       !address?.city ||
@@ -144,9 +232,13 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    // Fetch cart and populate products.
-    const cart = await Cart.findOne({ cartId })
-      .populate('items.product');
+    // ------------------------------------------------
+    // 3. FETCH CART
+    // ------------------------------------------------
+
+    const cart = await Cart.findOne({
+      cartId,
+    }).populate('items.product');
 
     if (!cart || !cart.items?.length) {
       return res.status(400).json({
@@ -154,26 +246,33 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    // Reserve stock for each item.
+    // ------------------------------------------------
+    // 4. VALIDATE PRODUCTS AND RESERVE STOCK
+    // ------------------------------------------------
+
     for (const item of cart.items) {
       if (
         !item.product ||
         item.product.status !== 'active'
       ) {
-        return res.status(400).json({
-          error: `${
-            item.product?.name || 'A product'
-          } is no longer available`,
-        });
+        const err = new Error(
+          `${item.product?.name || 'A product'} is no longer available`
+        );
+
+        err.statusCode = 400;
+        throw err;
       }
 
       if (
         !Number.isInteger(item.qty) ||
         item.qty < 1
       ) {
-        return res.status(400).json({
-          error: `Invalid quantity for ${item.product.name}`,
-        });
+        const err = new Error(
+          `Invalid quantity for ${item.product.name}`
+        );
+
+        err.statusCode = 400;
+        throw err;
       }
 
       const available = await reserveStock(
@@ -182,9 +281,12 @@ router.post('/', async (req, res, next) => {
       );
 
       if (!available) {
-        return res.status(409).json({
-          error: `Not enough stock for ${item.product.name}`,
-        });
+        const err = new Error(
+          `Not enough stock for ${item.product.name}`
+        );
+
+        err.statusCode = 409;
+        throw err;
       }
 
       reserved.push({
@@ -193,38 +295,56 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    // Calculate subtotal using current database prices.
-    const subtotal = cart.items.reduce((sum, item) => {
-      const price = Number(item.product.price);
+    // ------------------------------------------------
+    // 5. CALCULATE ORDER TOTAL
+    // ------------------------------------------------
 
-      if (!Number.isFinite(price) || price < 0) {
-        throw new Error(
-          `Invalid product price for ${item.product.name}`
-        );
-      }
+    const subtotal = cart.items.reduce(
+      (sum, item) => {
+        const price = Number(item.product.price);
 
-      return sum + price * item.qty;
-    }, 0);
+        if (
+          !Number.isFinite(price) ||
+          price < 0
+        ) {
+          throw new Error(
+            `Invalid product price for ${item.product.name}`
+          );
+        }
 
-    // Validate coupon.
+        return sum + price * item.qty;
+      },
+      0
+    );
+
     const couponResult = await validateCoupon(
       couponCode,
       subtotal
     );
 
-    const discount = couponResult.discount;
     coupon = couponResult.coupon;
+
+    const discount = couponResult.discount;
 
     const total =
       subtotal + FLAT_SHIPPING - discount;
 
-    if (!Number.isFinite(total) || total <= 0) {
-      return res.status(400).json({
-        error: 'Order total must be greater than zero',
-      });
+    if (
+      !Number.isFinite(total) ||
+      total <= 0
+    ) {
+      const err = new Error(
+        'Order total must be greater than zero'
+      );
+
+      err.statusCode = 400;
+      throw err;
     }
 
-    // Prepare order items.
+    // ------------------------------------------------
+    // 6. PREPARE ORDER DATA
+    // ------------------------------------------------
+
     const orderItems = cart.items.map(item => ({
       product: item.product._id,
       name: item.product.name,
@@ -233,9 +353,6 @@ router.post('/', async (req, res, next) => {
       qty: item.qty,
       image: item.product.images?.[0] || '',
     }));
-
-    // Generate unique order number.
-    let orderNumber = await generateOrderNumber();
 
     const orderData = {
       customerId,
@@ -251,18 +368,23 @@ router.post('/', async (req, res, next) => {
       giftMessage: giftMessage || '',
     };
 
-    // Create database order.
+    // ------------------------------------------------
+    // 7. CREATE DATABASE ORDER
+    // ------------------------------------------------
+
+    let orderNumber = await generateOrderNumber();
+
     try {
       order = await Order.create({
         ...orderData,
         orderNumber,
       });
     } catch (createErr) {
-      if (createErr.code !== 11000) {
+      if (createErr?.code !== 11000) {
         throw createErr;
       }
 
-      // Retry once if order number is duplicated.
+      // Retry once for duplicate order number.
       orderNumber = await generateOrderNumber();
 
       order = await Order.create({
@@ -271,7 +393,10 @@ router.post('/', async (req, res, next) => {
       });
     }
 
-    // Create Razorpay order.
+    // ------------------------------------------------
+    // 8. CREATE RAZORPAY ORDER
+    // ------------------------------------------------
+
     const razorpayOrder = await createRazorpayOrder(
       total,
       order.orderNumber
@@ -283,19 +408,34 @@ router.post('/', async (req, res, next) => {
       );
     }
 
-    // Save Razorpay order ID.
+    razorpayOrderCreated = true;
+
+    // ------------------------------------------------
+    // 9. SAVE RAZORPAY ORDER ID
+    // ------------------------------------------------
+
+    if (!order.payment) {
+      order.payment = {};
+    }
+
     order.payment.razorpayOrderId =
       razorpayOrder.id;
 
     await order.save();
 
-    // Increment coupon usage.
+    // ------------------------------------------------
+    // 10. UPDATE COUPON USAGE
+    // ------------------------------------------------
+
     if (coupon) {
       coupon.usedCount += 1;
       await coupon.save();
     }
 
-    // Return checkout response.
+    // ------------------------------------------------
+    // 11. RETURN CHECKOUT RESPONSE
+    // ------------------------------------------------
+
     return res.status(201).json({
       orderId: order.id,
       orderNumber: order.orderNumber,
@@ -305,106 +445,130 @@ router.post('/', async (req, res, next) => {
     });
 
   } catch (err) {
+    // ------------------------------------------------
+    // 12. LOG ORIGINAL ERROR SAFELY
+    // ------------------------------------------------
+
+    const errorMessage = getErrorMessage(err);
+
     console.error('Checkout failed:', {
-      message: err.message,
-      code: err.code,
-      name: err.name,
-      stack: err.stack,
+      message: errorMessage,
+      code: err?.code,
+      name: err?.name,
+      stack: err?.stack,
+      error: err,
+      orderId: order?._id,
+      razorpayOrderCreated,
     });
 
-    // Best-effort rollback of stock reservations.
-    for (const reservation of reserved) {
-      try {
-        await releaseStock(
-          reservation.productId,
-          reservation.qty
-        );
-      } catch (releaseErr) {
-        console.error(
-          'Checkout stock rollback failed:',
-          {
-            productId: String(reservation.productId),
-            message: releaseErr.message,
-          }
-        );
-      }
-    }
+    // ------------------------------------------------
+    // 13. ROLLBACK RESERVED STOCK
+    // ------------------------------------------------
+
+    await rollbackStock(reserved);
 
     if (res.headersSent) {
       return next(err);
     }
 
-    // Known customer-facing validation errors.
-    const knownClientErrors = new Set([
-      'Invalid coupon code',
-      'Coupon has expired',
-      'Coupon usage limit reached',
-    ]);
+    // ------------------------------------------------
+    // 14. RETURN APPROPRIATE ERROR
+    // ------------------------------------------------
 
-    if (
-      knownClientErrors.has(err.message) ||
-      err.message.startsWith('Minimum order value')
-    ) {
+    if (err?.statusCode === 400) {
       return res.status(400).json({
-        error: err.message,
+        error: errorMessage,
       });
     }
 
-    if (err.name === 'ValidationError') {
-      return res.status(400).json({
-        error: 'Please check the checkout details and try again.',
+    if (err?.statusCode === 409) {
+      return res.status(409).json({
+        error: errorMessage,
       });
     }
 
-    // Unexpected errors are server errors.
+    if (err?.name === 'ValidationError') {
+      return res.status(400).json({
+        error:
+          'Please check the checkout details and try again.',
+      });
+    }
+
+    if (err?.code === 11000) {
+      return res.status(409).json({
+        error:
+          'A duplicate order was detected. Please try again.',
+      });
+    }
+
+    // Unknown errors are server errors.
     return res.status(500).json({
-      error: 'Checkout failed due to a server error. Please try again.',
+      error:
+        'Checkout failed due to a server error. Please try again.',
     });
   }
 });
 
+// --------------------------------------------------
 // POST /api/checkout/:orderId/cancel
-router.post('/:orderId/cancel', async (req, res, next) => {
-  try {
-    const order = await Order.findById(
-      req.params.orderId
-    );
+// --------------------------------------------------
 
-    if (!order) {
-      return res.status(404).json({
-        error: 'Order not found',
-      });
-    }
-
-    if (order.paymentStatus === 'Paid') {
-      return res.status(400).json({
-        error: 'Cannot cancel a paid order this way',
-      });
-    }
-
-    for (const item of order.items) {
-      await releaseStock(
-        item.product,
-        item.qty
+router.post(
+  '/:orderId/cancel',
+  async (req, res, next) => {
+    try {
+      const order = await Order.findById(
+        req.params.orderId
       );
+
+      if (!order) {
+        return res.status(404).json({
+          error: 'Order not found',
+        });
+      }
+
+      if (order.paymentStatus === 'Paid') {
+        return res.status(400).json({
+          error:
+            'Cannot cancel a paid order this way',
+        });
+      }
+
+      if (order.orderStatus === 'Cancelled') {
+        return res.json({
+          cancelled: true,
+          message: 'Order is already cancelled',
+        });
+      }
+
+      for (const item of order.items) {
+        await releaseStock(
+          item.product,
+          item.qty
+        );
+      }
+
+      order.orderStatus = 'Cancelled';
+
+      await order.save();
+
+      return res.json({
+        cancelled: true,
+      });
+
+    } catch (err) {
+      console.error(
+        'Checkout cancellation failed:',
+        {
+          message: getErrorMessage(err),
+          code: err?.code,
+          stack: err?.stack,
+        }
+      );
+
+      return next(err);
     }
-
-    order.orderStatus = 'Cancelled';
-    await order.save();
-
-    return res.json({
-      cancelled: true,
-    });
-
-  } catch (err) {
-    console.error('Checkout cancellation failed:', {
-      message: err.message,
-      code: err.code,
-      stack: err.stack,
-    });
-
-    return next(err);
   }
-});
+);
 
 module.exports = router;
