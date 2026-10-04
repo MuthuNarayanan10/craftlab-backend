@@ -85,4 +85,27 @@ router.post('/release-stale', async (req, res) => {
   res.json({ released: staleOrders.length });
 });
 
+// PUT /api/admin/orders/:id/invoice — generates (or regenerates) a tax
+// invoice number and stores the GST rate/amount the admin specifies.
+// GST in Indian B2C e-commerce is normally INCLUSIVE of the displayed
+// price, so the tax amount here is a breakup of the existing total,
+// not an addition to it.
+router.put('/:id/invoice', async (req, res) => {
+  const { taxRate } = req.body;
+  const order = await Order.findById(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+
+  if (!order.invoiceNumber) {
+    const count = await Order.countDocuments({ invoiceNumber: { $ne: '' } });
+    order.invoiceNumber = `INV-${1001 + count}`;
+  }
+  const rate = parseFloat(taxRate) || 0;
+  order.taxRate = rate;
+  order.taxAmount = rate > 0 ? Math.round((order.total - order.total / (1 + rate / 100)) * 100) / 100 : 0;
+  await order.save();
+
+  await logAction('order.invoice_generated', req.admin.email, { orderNumber: order.orderNumber, invoiceNumber: order.invoiceNumber });
+  res.json(order);
+});
+
 module.exports = router;

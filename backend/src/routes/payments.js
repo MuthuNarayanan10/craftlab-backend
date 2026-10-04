@@ -43,7 +43,12 @@ async function markOrderPaid(order, { razorpay_payment_id, razorpay_signature, m
   await createNotification('new_order', `New order ${order.orderNumber} — ₹${order.total}`, { orderNumber: order.orderNumber });
   await logAction('order.paid', via, { orderNumber: order.orderNumber, paymentId: razorpay_payment_id });
 
-  const { subject, html } = orderConfirmationEmail(order);
+  // Suggest other active products the customer didn't just buy — a simple,
+  // real cross-sell (not personalized ML, just "other things we sell").
+  const purchasedIds = order.items.map(i => i.product.toString());
+  const suggestions = await Product.find({ _id: { $nin: purchasedIds }, status: 'active' }).limit(2);
+
+  const { subject, html } = orderConfirmationEmail(order, suggestions);
   sendEmail(order.customer.email, subject, html); // fire-and-forget — never blocks the response
 
   return order;

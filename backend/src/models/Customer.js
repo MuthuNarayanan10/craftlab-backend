@@ -13,9 +13,12 @@ const addressSchema = new mongoose.Schema({
 
 const customerSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-  phone: { type: String, default: '' },
-  passwordHash: { type: String, required: true },
+  // Either email+password OR phone+OTP (Firebase) — not both required.
+  email: { type: String, unique: true, sparse: true, lowercase: true, trim: true },
+  phone: { type: String, unique: true, sparse: true, trim: true }, // E.164, e.g. +919876543210
+  firebaseUid: { type: String, unique: true, sparse: true },
+  authMethod: { type: String, enum: ['password', 'otp'], default: 'password' },
+  passwordHash: { type: String, default: '' },
   addresses: [addressSchema],
   status: { type: String, enum: ['active', 'blocked'], default: 'active' },
 }, { timestamps: true });
@@ -24,6 +27,7 @@ customerSchema.methods.setPassword = async function (plainPassword) {
   this.passwordHash = await bcrypt.hash(plainPassword, 12);
 };
 customerSchema.methods.checkPassword = function (plainPassword) {
+  if (!this.passwordHash) return Promise.resolve(false);
   return bcrypt.compare(plainPassword, this.passwordHash);
 };
 customerSchema.methods.toJSON = function () {
@@ -32,6 +36,7 @@ customerSchema.methods.toJSON = function () {
   delete obj._id;
   delete obj.__v;
   delete obj.passwordHash;
+  delete obj.firebaseUid;
   return obj;
 };
 

@@ -24,6 +24,7 @@ const adminSupplierRoutes = require('./src/routes/adminSuppliers');
 const returnsRoutes = require('./src/routes/returns');
 const adminReturnsRoutes = require('./src/routes/adminReturns');
 const adminNotificationsRoutes = require('./src/routes/adminNotifications');
+const adminQuotationsRoutes = require('./src/routes/adminQuotations');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -47,6 +48,7 @@ app.use('/api/', generalLimiter);
 app.use('/api/auth/login', authLimiter);
 app.use('/api/customers/login', authLimiter);
 app.use('/api/customers/signup', authLimiter);
+app.use('/api/customers/otp-login', authLimiter);
 
 // IMPORTANT: the Razorpay webhook needs the raw request body to verify its
 // signature, so it must be mounted with express.raw() BEFORE the global
@@ -79,6 +81,7 @@ app.use('/api/admin/customers', requireAdmin, adminCustomerRoutes);
 app.use('/api/admin/suppliers', requireAdmin, adminSupplierRoutes);
 app.use('/api/admin/returns', requireAdmin, adminReturnsRoutes);
 app.use('/api/admin/notifications', requireAdmin, adminNotificationsRoutes);
+app.use('/api/admin/quotations', requireAdmin, adminQuotationsRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

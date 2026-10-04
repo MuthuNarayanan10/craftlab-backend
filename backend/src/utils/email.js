@@ -23,7 +23,21 @@ async function sendEmail(to, subject, html) {
   }
 }
 
-function orderConfirmationEmail(order) {
+function orderConfirmationEmail(order, suggestedProducts = []) {
+  const suggestionsHtml = suggestedProducts.length ? `
+    <div style="margin-top:24px;padding-top:20px;border-top:1px solid #eee;">
+      <p style="font-size:13px;color:#6B6255;margin-bottom:12px;">You might also like</p>
+      <div style="display:flex;gap:12px;">
+        ${suggestedProducts.map(p => `
+          <a href="https://thecraftlab.co.in/product.html?slug=${p.slug}" style="text-decoration:none;color:#2A2620;flex:1;">
+            <img src="${p.images?.[0] ? 'https://thecraftlab.co.in/' + p.images[0] : ''}" style="width:100%;border-radius:4px;margin-bottom:6px;">
+            <p style="font-size:12px;">${p.name}</p>
+            <p style="font-size:12px;font-weight:700;">₹${p.price}</p>
+          </a>
+        `).join('')}
+      </div>
+    </div>` : '';
+
   return {
     subject: `Order Confirmed — ${order.orderNumber} | The Craft Lab`,
     html: `
@@ -36,6 +50,7 @@ function orderConfirmationEmail(order) {
         <p><strong>Total: ₹${order.total}</strong></p>
         <p style="color:#6B6255;font-size:13px;margin-top:20px;">Estimated delivery: 5–7 business days. Track anytime at thecraftlab.co.in/order-tracking.html</p>
         <p style="color:#6B6255;font-size:13px;">Questions? Reply to this email or reach care@thecraftlab.co.in</p>
+        ${suggestionsHtml}
       </div>`
   };
 }

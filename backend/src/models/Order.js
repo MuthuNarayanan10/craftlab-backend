@@ -29,6 +29,9 @@ const orderSchema = new mongoose.Schema({
 
   items: [orderItemSchema],
   giftMessage: { type: String, default: '' },
+  invoiceNumber: { type: String, default: '' },
+  taxRate: { type: Number, default: 0 }, // % GST, set by admin when generating the invoice
+  taxAmount: { type: Number, default: 0 },
 
   subtotal: { type: Number, required: true },
   shipping: { type: Number, default: 0 },

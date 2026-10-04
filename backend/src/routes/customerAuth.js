@@ -4,6 +4,7 @@ const router = express.Router();
 const Customer = require('../models/Customer');
 const Order = require('../models/Order');
 const { requireCustomer } = require('../middleware/customerAuth');
+const { verifyFirebaseToken } = require('../utils/firebase');
 
 function signCustomerToken(customer) {
   return jwt.sign({ sub: customer.id, type: 'customer' }, process.env.JWT_SECRET, { expiresIn: '30d' });
@@ -39,6 +40,46 @@ router.post('/login', async (req, res) => {
 
   const token = signCustomerToken(customer);
   res.json({ token, customer });
+});
+
+// POST /api/customers/otp-login — body: { idToken, name? }
+// idToken comes from Firebase Phone Auth on the frontend after the customer
+// enters their mobile number and the 6-digit SMS OTP. We verify it server-side
+// (never trust a phone number sent raw from the browser), then find-or-create
+// the customer account by phone number and issue our own JWT, same as the
+// password-login flow — so every other route (orders, addresses) works
+// identically regardless of which way the customer logged in.
+router.post('/otp-login', async (req, res) => {
+  const { idToken, name } = req.body;
+  if (!idToken) return res.status(400).json({ error: 'idToken is required' });
+
+  let decoded;
+  try {
+    decoded = await verifyFirebaseToken(idToken);
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid or expired OTP session. Please try again.' });
+  }
+
+  const phone = decoded.phone_number; // E.164 format, e.g. +919876543210
+  if (!phone) return res.status(400).json({ error: 'No verified phone number on this token' });
+
+  let customer = await Customer.findOne({ phone });
+  if (!customer) {
+    customer = await Customer.create({
+      name: name || 'Craft Lab Customer',
+      phone,
+      firebaseUid: decoded.uid,
+      authMethod: 'otp',
+    });
+  } else if (customer.status === 'blocked') {
+    return res.status(403).json({ error: 'This account has been blocked. Contact care@thecraftlab.co.in.' });
+  } else if (!customer.firebaseUid) {
+    customer.firebaseUid = decoded.uid; // link if this phone previously signed up another way
+    await customer.save();
+  }
+
+  const token = signCustomerToken(customer);
+  res.json({ token, customer, isNewCustomer: customer.createdAt.getTime() === customer.updatedAt.getTime() });
 });
 
 // GET /api/customers/me
