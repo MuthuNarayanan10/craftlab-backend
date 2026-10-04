@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const notificationSchema = new mongoose.Schema({
-  type: { type: String, enum: ['new_order', 'low_stock', 'payment_failed', 'return_requested'], required: true },
+  type: { type: String, enum: ['new_order', 'low_stock', 'payment_failed', 'return_requested', 'contact_message'], required: true },
   message: { type: String, required: true },
   meta: { type: mongoose.Schema.Types.Mixed, default: {} },
   read: { type: Boolean, default: false },

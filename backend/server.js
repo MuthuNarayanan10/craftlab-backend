@@ -1,4 +1,6 @@
 require('dotenv').config();
+require('./src/utils/asyncErrors'); // forward async route errors to the error handler
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -25,6 +27,13 @@ const returnsRoutes = require('./src/routes/returns');
 const adminReturnsRoutes = require('./src/routes/adminReturns');
 const adminNotificationsRoutes = require('./src/routes/adminNotifications');
 const adminQuotationsRoutes = require('./src/routes/adminQuotations');
+const publicConfigRoutes = require('./src/routes/publicConfig');
+const publicFormsRoutes = require('./src/routes/publicForms');
+const adminSettingsRoutes = require('./src/routes/adminSettings');
+const adminTaxRoutes = require('./src/routes/adminTax');
+const adminSubscribersRoutes = require('./src/routes/adminSubscribers');
+
+process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -55,6 +64,8 @@ app.use('/api/customers/otp-login', authLimiter);
 // express.json() parser below (which would otherwise consume the body first).
 app.use('/api/webhooks/razorpay', express.raw({ type: '*/*' }), paymentRoutes);
 
+app.use('/api/returns', express.json({ limit: '8mb' })); // customer damage photos
+app.use('/api/admin/products', express.json({ limit: '10mb' })); // product photos (base64)
 app.use(express.json({ limit: '2mb' }));
 
 // --- Public health check ---
@@ -69,7 +80,9 @@ app.use('/api/payments', paymentRoutes); // /verify — public callback, but sig
 app.use('/api/coupons', couponRoutes);   // /validate only
 app.use('/api/track', trackRoutes);      // public order tracking (requires order number + email)
 app.use('/api/customers', customerAuthRoutes); // signup/login/me — customer JWT, separate from admin
-app.use('/api/returns', returnsRoutes); // customer-facing return requests (requires customer login)
+app.use('/api/returns', returnsRoutes);
+app.use('/api/config', publicConfigRoutes);
+app.use('/api', publicFormsRoutes); // /subscribers, /contact // customer-facing return requests (requires customer login)
 
 // --- Admin routes (everything below requires a valid admin JWT) ---
 app.use('/api/admin/products', requireAdmin, adminProductRoutes);
@@ -82,6 +95,9 @@ app.use('/api/admin/suppliers', requireAdmin, adminSupplierRoutes);
 app.use('/api/admin/returns', requireAdmin, adminReturnsRoutes);
 app.use('/api/admin/notifications', requireAdmin, adminNotificationsRoutes);
 app.use('/api/admin/quotations', requireAdmin, adminQuotationsRoutes);
+app.use('/api/admin/settings', requireAdmin, adminSettingsRoutes);
+app.use('/api/admin/tax', requireAdmin, adminTaxRoutes);
+app.use('/api/admin/subscribers', requireAdmin, adminSubscribersRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

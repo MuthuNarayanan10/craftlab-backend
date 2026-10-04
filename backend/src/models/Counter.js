@@ -11,12 +11,10 @@ const counterSchema = new mongoose.Schema({
 
 const Counter = mongoose.model('Counter', counterSchema);
 
-async function getNextSequence(name) {
-  const counter = await Counter.findByIdAndUpdate(
-    name,
-    { $inc: { seq: 1 } },
-    { new: true, upsert: true }
-  );
+async function getNextSequence(name, start = 1000) {
+  // Make sure the counter exists (starting at `start`), then increment atomically.
+  await Counter.updateOne({ _id: name }, { $setOnInsert: { seq: start } }, { upsert: true }).catch(() => {});
+  const counter = await Counter.findByIdAndUpdate(name, { $inc: { seq: 1 } }, { new: true });
   return counter.seq;
 }
 

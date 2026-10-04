@@ -3,6 +3,7 @@ const connectDB = require('../src/db');
 const Admin = require('../src/models/Admin');
 const Product = require('../src/models/Product');
 const Coupon = require('../src/models/Coupon');
+const { getSettings } = require('../src/models/Settings');
 
 async function seed() {
   await connectDB();
@@ -113,6 +114,9 @@ async function seed() {
     if (!existing) { await Coupon.create(c); console.log(`✅ Created coupon: ${c.code}`); }
     else console.log(`ℹ️  Coupon ${c.code} already exists — skipping.`);
   }
+
+  await getSettings(); // creates the default business settings document
+  console.log('✅ Business settings ready (edit them in Admin → Business & Tax)');
 
   console.log('\n✅ Product images are pre-linked to files bundled in frontend/images/ — no upload needed to launch.');
   console.log('Done. You can now log in to the admin dashboard with the SEED_ADMIN_EMAIL/PASSWORD from your .env file.');

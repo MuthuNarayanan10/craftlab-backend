@@ -36,7 +36,7 @@ cp .env.example .env
 Fill in `.env`:
 - `MONGODB_URI` — from step 1
 - `JWT_SECRET` — any long random string (`openssl rand -hex 32`)
-- `RAZORPAY_KEY_ID` — your test key (already have: `rzp_test_Tb6dEjqrGHZh7yV`)
+- `RAZORPAY_KEY_ID` — your test key (already have: `rzp_test_xxxxxxxxxxxxxx`)
 - `RAZORPAY_KEY_SECRET` — from Razorpay Dashboard → Settings → API Keys (the secret shown once when you generated the test key)
 - `RAZORPAY_WEBHOOK_SECRET` — see step 4 below
 - `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` — your first admin login credentials
@@ -104,3 +104,25 @@ Root Directory: `backend` (or blank if you upload only this folder's contents �
 - Frontend storefront + admin UI — coming next
 - Email sending (order confirmations etc.) — not yet wired; needs an email provider (e.g. Resend, SendGrid)
 - WhatsApp API integration — per the launch guide, start with the WhatsApp Business app manually, wire the API later
+
+---
+
+## v3 additions
+
+**Checkout** — `POST /api/checkout` accepts `paymentMethod: "online" | "cod"`. Totals (coupon, prepaid discount, COD fee) are always computed server-side from the business settings. COD orders are placed immediately (status *Processing*) and become *Paid* when an admin sets them to *Delivered*.
+
+**Public**
+- `GET /api/config/public` — non-sensitive store settings (COD, prepaid %, support WhatsApp, return window)
+- `POST /api/subscribers` — newsletter signup · `POST /api/contact` — contact form (admin notification + email to support)
+- `POST /api/returns` — now accepts `resolution` and up to 4 compressed `images` (data URLs); enforces the return window from settings
+
+**Admin**
+- `GET /api/admin/dashboard/overview` — all dashboard figures in one call (revenue windows in IST, trend, pipeline, top products, low stock, COD receivable, GST totals, launch-readiness flags)
+- `GET|PUT /api/admin/settings` — business details, GST defaults, COD/prepaid, support WhatsApp, return window
+- `GET /api/admin/tax/summary` — GST by month + invoice register
+- `GET /api/admin/returns/:id` — full return incl. photos · `GET /api/admin/subscribers`
+- `POST /api/admin/quotations/:id/send-email` — email a quotation request to a manufacturer
+
+**Environment variables** are unchanged; `RESEND_*` and `FIREBASE_SERVICE_ACCOUNT_JSON` remain optional. New order alerts are emailed to the *support email* saved in Admin → Business settings.
+
+**Reliability** — async route errors are forwarded to the error handler (`src/utils/asyncErrors.js`); stray promise rejections are logged instead of crashing the process.

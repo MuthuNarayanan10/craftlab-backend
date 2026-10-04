@@ -68,4 +68,41 @@ function orderStatusEmail(order) {
   };
 }
 
-module.exports = { sendEmail, orderConfirmationEmail, orderStatusEmail };
+
+function quotationRequestEmail(quotation, supplier, settings) {
+  const rows = quotation.items.map(i => `<tr><td style="padding:8px 0;border-bottom:1px solid #eee;">${i.description}</td><td style="text-align:center;">${i.qty}</td><td style="text-align:right;">₹${i.unitPrice}</td></tr>`).join('');
+  return {
+    subject: `Quotation request ${quotation.quotationNumber} — ${settings.businessName || 'The Craft Lab'}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#2A2620;">
+        <p>Hello ${supplier.contactPerson || supplier.name},</p>
+        <p>${settings.businessName || 'The Craft Lab'} would like to request a quotation (ref <strong>${quotation.quotationNumber}</strong>) for the following:</p>
+        <table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">
+          <tr style="border-bottom:1px solid #999;"><th style="text-align:left;">Item</th><th>Qty</th><th style="text-align:right;">Our reference price</th></tr>
+          ${rows}
+        </table>
+        ${quotation.notes ? `<p><strong>Notes:</strong> ${quotation.notes}</p>` : ''}
+        <p>Please reply with your best price, lead time and GST details.</p>
+        <p style="color:#6B6255;font-size:13px;margin-top:18px;">${settings.businessName || 'The Craft Lab'}${settings.gstin ? ` · GSTIN ${settings.gstin}` : ''}<br>${settings.email || ''} ${settings.phone ? '· ' + settings.phone : ''}</p>
+      </div>`
+  };
+}
+
+function newOrderAlertEmail(order) {
+  const cod = order.payment?.method === 'cod';
+  return {
+    subject: `New ${cod ? 'COD ' : ''}order ${order.orderNumber} — ₹${order.total}`,
+    html: `
+      <div style="font-family:sans-serif;max-width:560px;margin:0 auto;color:#2A2620;">
+        <h2 style="color:#544C35;">New order ${order.orderNumber}</h2>
+        <p><strong>${cod ? 'Cash on Delivery — collect ₹' + order.total + ' on delivery' : 'Paid online — ₹' + order.total}</strong></p>
+        <p>${order.customer.name} · ${order.customer.phone} · ${order.customer.email}</p>
+        <p>${order.address.line1}${order.address.line2 ? ', ' + order.address.line2 : ''}, ${order.address.city}, ${order.address.state} ${order.address.pincode}</p>
+        <table style="width:100%;border-collapse:collapse;margin:12px 0;">${order.items.map(i => `<tr><td style="padding:6px 0;border-bottom:1px solid #eee;">${i.name} × ${i.qty}</td><td style="text-align:right;">₹${i.price * i.qty}</td></tr>`).join('')}</table>
+        ${order.giftMessage ? `<p><strong>Gift message:</strong> ${order.giftMessage}</p>` : ''}
+        <p style="color:#6B6255;font-size:13px;">Open the admin dashboard → Orders to pack, print the label and add tracking.</p>
+      </div>`
+  };
+}
+
+module.exports = { newOrderAlertEmail, quotationRequestEmail, sendEmail, orderConfirmationEmail, orderStatusEmail };

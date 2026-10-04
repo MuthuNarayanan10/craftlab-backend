@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const Order = require('../models/Order');
 const Product = require('../models/Product');
+const { getSettings } = require('../models/Settings');
+const { getNextSequence } = require('../models/Counter');
 const { logAction } = require('../models/AuditLog');
 const { sendEmail, orderStatusEmail } = require('../utils/email');
 
@@ -29,10 +31,22 @@ router.put('/:id/status', async (req, res) => {
   const previous = order.orderStatus;
   order.orderStatus = orderStatus;
 
-  // If an admin cancels/refunds a paid order manually, release/return stock accordingly.
-  if (orderStatus === 'Cancelled' && previous !== 'Cancelled' && order.paymentStatus !== 'Refunded') {
-    for (const item of order.items) {
-      await Product.findByIdAndUpdate(item.product, { $inc: { stock: item.qty } });
+  // Stock was only permanently deducted for paid online orders and COD orders.
+  const stockDeducted = order.paymentStatus === 'Paid' || order.payment.method === 'cod';
+  if (orderStatus === 'Cancelled' && previous !== 'Cancelled') {
+    if (stockDeducted && order.paymentStatus !== 'Refunded') {
+      for (const item of order.items) await Product.findByIdAndUpdate(item.product, { $inc: { stock: item.qty } });
+    } else if (!stockDeducted) {
+      for (const item of order.items) await Product.findByIdAndUpdate(item.product, { $inc: { reserved: -item.qty } });
+    }
+  }
+
+  if (orderStatus === 'Delivered') {
+    if (!order.deliveredAt) order.deliveredAt = new Date();
+    // Cash on Delivery: payment is collected at the door, so mark it paid on delivery.
+    if (order.payment.method === 'cod' && order.paymentStatus === 'Pending') {
+      order.paymentStatus = 'Paid';
+      order.payment.verifiedAt = new Date();
     }
   }
 
@@ -43,7 +57,6 @@ router.put('/:id/status', async (req, res) => {
     const { subject, html } = orderStatusEmail(order);
     sendEmail(order.customer.email, subject, html); // fire-and-forget
   }
-
   res.json(order);
 });
 
@@ -52,7 +65,7 @@ router.put('/:id/delivery', async (req, res) => {
   const { partner, trackingId, dispatchDate, expectedDelivery, notes } = req.body;
   const order = await Order.findByIdAndUpdate(
     req.params.id,
-    { delivery: { partner, trackingId, dispatchDate, expectedDelivery, notes } },
+    { delivery: { partner, trackingId, dispatchDate: dispatchDate || null, expectedDelivery: expectedDelivery || null, notes } },
     { new: true }
   );
   if (!order) return res.status(404).json({ error: 'Order not found' });
@@ -60,46 +73,38 @@ router.put('/:id/delivery', async (req, res) => {
   res.json(order);
 });
 
-// POST /api/admin/orders/release-stale — releases inventory reservations for
-// orders that have sat Pending too long (customer likely abandoned checkout
-// before paying). Run manually from the admin dashboard; can later be wired
-// to a scheduled job if order volume makes that worthwhile.
+// POST /api/admin/orders/release-stale — frees stock held by checkouts that never completed
 router.post('/release-stale', async (req, res) => {
   const cutoffMinutes = parseInt(req.body.cutoffMinutes) || 30;
   const cutoff = new Date(Date.now() - cutoffMinutes * 60 * 1000);
   const staleOrders = await Order.find({
     orderStatus: 'Pending',
-    paymentStatus: 'Pending',
+    paymentStatus: { $in: ['Pending', 'Failed'] },
     createdAt: { $lt: cutoff },
   });
-
   for (const order of staleOrders) {
-    for (const item of order.items) {
-      await Product.findByIdAndUpdate(item.product, { $inc: { reserved: -item.qty } });
-    }
+    for (const item of order.items) await Product.findByIdAndUpdate(item.product, { $inc: { reserved: -item.qty } });
     order.orderStatus = 'Cancelled';
     await order.save();
   }
-
   await logAction('orders.stale_released', req.admin.email, { count: staleOrders.length });
   res.json({ released: staleOrders.length });
 });
 
-// PUT /api/admin/orders/:id/invoice — generates (or regenerates) a tax
-// invoice number and stores the GST rate/amount the admin specifies.
-// GST in Indian B2C e-commerce is normally INCLUSIVE of the displayed
-// price, so the tax amount here is a breakup of the existing total,
-// not an addition to it.
+// PUT /api/admin/orders/:id/invoice — generates (or regenerates) a tax invoice.
+// Indian B2C prices are normally GST-inclusive, so the tax figure is a breakup
+// of the order total, not an addition to it.
 router.put('/:id/invoice', async (req, res) => {
-  const { taxRate } = req.body;
   const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
+  const settings = await getSettings();
 
   if (!order.invoiceNumber) {
-    const count = await Order.countDocuments({ invoiceNumber: { $ne: '' } });
-    order.invoiceNumber = `INV-${1001 + count}`;
+    const seq = await getNextSequence('invoiceNumber');
+    order.invoiceNumber = `${settings.invoicePrefix || 'INV'}-${seq}`;
   }
-  const rate = parseFloat(taxRate) || 0;
+  const parsed = parseFloat(req.body.taxRate);
+  const rate = Number.isFinite(parsed) ? parsed : settings.defaultTaxRate || 0;
   order.taxRate = rate;
   order.taxAmount = rate > 0 ? Math.round((order.total - order.total / (1 + rate / 100)) * 100) / 100 : 0;
   await order.save();

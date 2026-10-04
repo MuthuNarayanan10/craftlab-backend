@@ -85,14 +85,21 @@ router.post('/otp-login', async (req, res) => {
 // GET /api/customers/me
 router.get('/me', requireCustomer, (req, res) => res.json(req.customer));
 
-// PUT /api/customers/me — update profile / addresses
+// PUT /api/customers/me — update profile / saved addresses
 router.put('/me', requireCustomer, async (req, res) => {
-  const { name, phone, addresses } = req.body;
+  const { name, phone, email, addresses } = req.body;
   const updates = {};
-  if (name !== undefined) updates.name = name;
-  if (phone !== undefined) updates.phone = phone;
-  if (addresses !== undefined) updates.addresses = addresses;
-
+  if (name !== undefined) updates.name = String(name).trim();
+  if (phone !== undefined && !req.customer.phone) updates.phone = phone; // phone of an OTP account is verified and can't be changed here
+  if (email !== undefined && String(email).toLowerCase() !== req.customer.email) {
+    const clash = await Customer.findOne({ email: String(email).toLowerCase(), _id: { $ne: req.customer.id } });
+    if (clash) return res.status(409).json({ error: 'That email is already used by another account' });
+    updates.email = String(email).toLowerCase();
+  }
+  if (addresses !== undefined) {
+    if (!Array.isArray(addresses) || addresses.length > 10) return res.status(400).json({ error: 'You can save up to 10 addresses' });
+    updates.addresses = addresses;
+  }
   const customer = await Customer.findByIdAndUpdate(req.customer.id, updates, { new: true, runValidators: true });
   res.json(customer);
 });

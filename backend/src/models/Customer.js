@@ -3,6 +3,8 @@ const bcrypt = require('bcryptjs');
 
 const addressSchema = new mongoose.Schema({
   label: { type: String, default: 'Home' },
+  receiverName: { type: String, default: '' },
+  receiverPhone: { type: String, default: '' },
   line1: { type: String, required: true },
   line2: { type: String, default: '' },
   city: { type: String, required: true },

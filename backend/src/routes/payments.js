@@ -6,7 +6,8 @@ const Cart = require('../models/Cart');
 const { verifyPaymentSignature, verifyWebhookSignature } = require('../utils/razorpay');
 const { logAction } = require('../models/AuditLog');
 const { createNotification } = require('../models/Notification');
-const { sendEmail, orderConfirmationEmail } = require('../utils/email');
+const { sendEmail, orderConfirmationEmail, newOrderAlertEmail } = require('../utils/email');
+const { getSettings } = require('../models/Settings');
 
 /** Marks an order paid and permanently deducts stock. Idempotent — if the
  *  order is already Paid (e.g. the callback AND the webhook both fire for
@@ -50,6 +51,7 @@ async function markOrderPaid(order, { razorpay_payment_id, razorpay_signature, m
 
   const { subject, html } = orderConfirmationEmail(order, suggestions);
   sendEmail(order.customer.email, subject, html); // fire-and-forget — never blocks the response
+  getSettings().then((st) => { if (st.email) { const a = newOrderAlertEmail(order); sendEmail(st.email, a.subject, a.html); } }).catch(() => {});
 
   return order;
 }
