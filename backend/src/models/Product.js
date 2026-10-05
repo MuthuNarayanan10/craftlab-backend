@@ -34,6 +34,9 @@ const productSchema = new mongoose.Schema({
   status: { type: String, enum: ['active', 'draft', 'archived'], default: 'active' },
 }, { timestamps: true });
 
+productSchema.index({ status: 1, createdAt: -1 });
+productSchema.index({ stock: 1 });
+
 productSchema.virtual('available').get(function () {
   return Math.max(0, this.stock - this.reserved);
 });

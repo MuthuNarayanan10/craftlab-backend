@@ -20,6 +20,22 @@ const settingsSchema = new mongoose.Schema({
   codEnabled: { type: Boolean, default: false },
   codFee: { type: Number, default: 0 },
   prepaidDiscountPercent: { type: Number, default: 0 },
+  // Authentication (all editable in Admin → Business settings, enforced on the server)
+  customerLoginEnabled: { type: Boolean, default: true },
+  customerSignupEnabled: { type: Boolean, default: true },
+  otpEnabled: { type: Boolean, default: true },
+  otpProvider: { type: String, enum: ['none', 'dev', 'msg91', 'firebase'], default: 'none' },
+  guestCheckoutEnabled: { type: Boolean, default: true },
+  autoCreateAccounts: { type: Boolean, default: true },
+  requireMobileVerification: { type: Boolean, default: false },
+  // Shipping automation
+  autoCreateShipment: { type: Boolean, default: false },
+  defaultCourierProvider: { type: String, default: 'manual' },
+  // Notifications
+  notifyEmailEnabled: { type: Boolean, default: true },
+  notifyWhatsappEnabled: { type: Boolean, default: false },
+  // Returns
+  autoApproveReturns: { type: Boolean, default: false },
   // Support
   supportWhatsapp: { type: String, default: '' },
   returnWindowDays: { type: Number, default: 7 },

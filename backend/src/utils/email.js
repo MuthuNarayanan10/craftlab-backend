@@ -15,7 +15,11 @@ async function sendEmail(to, subject, html) {
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ from, to, subject, html }),
     });
-    if (!res.ok) console.error('Email send failed:', await res.text());
+    if (!res.ok) { // surface provider rejections (bad key, unverified domain, …) so callers — and the notification log — never record a failed email as sent
+      const detail = (await res.text().catch(() => '')).slice(0, 200);
+      console.error('Email send failed:', res.status, detail);
+      return { error: `Email provider returned ${res.status}: ${detail}` };
+    }
     return res.json();
   } catch (err) {
     console.error('Email send error (non-fatal):', err.message);

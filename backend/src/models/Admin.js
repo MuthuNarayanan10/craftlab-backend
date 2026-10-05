@@ -7,6 +7,8 @@ const adminSchema = new mongoose.Schema({
   passwordHash: { type: String, required: true },
   role: { type: String, enum: ['ADMIN', 'STAFF'], default: 'STAFF' },
   active: { type: Boolean, default: true },
+  failedLogins: { type: Number, default: 0 },
+  lockUntil: { type: Date, default: null },
 }, { timestamps: true });
 
 adminSchema.methods.setPassword = async function (plainPassword) {
@@ -23,6 +25,8 @@ adminSchema.methods.toJSON = function () {
   delete obj._id;
   delete obj.__v;
   delete obj.passwordHash;
+  delete obj.failedLogins;
+  delete obj.lockUntil;
   return obj;
 };
 

@@ -19,6 +19,8 @@ const customerSchema = new mongoose.Schema({
   email: { type: String, unique: true, sparse: true, lowercase: true, trim: true },
   phone: { type: String, unique: true, sparse: true, trim: true }, // E.164, e.g. +919876543210
   firebaseUid: { type: String, unique: true, sparse: true },
+  phoneVerified: { type: Boolean, default: false },
+  lastLoginAt: { type: Date, default: null },
   authMethod: { type: String, enum: ['password', 'otp'], default: 'password' },
   passwordHash: { type: String, default: '' },
   addresses: [addressSchema],

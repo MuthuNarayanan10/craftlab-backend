@@ -4,6 +4,7 @@ const Admin = require('../src/models/Admin');
 const Product = require('../src/models/Product');
 const Coupon = require('../src/models/Coupon');
 const { getSettings } = require('../src/models/Settings');
+const DeliveryMethod = require('../src/models/DeliveryMethod');
 
 async function seed() {
   await connectDB();
@@ -115,7 +116,9 @@ async function seed() {
     else console.log(`ℹ️  Coupon ${c.code} already exists — skipping.`);
   }
 
-  await getSettings(); // creates the default business settings document
+  await getSettings();
+  await DeliveryMethod.ensureDefaults();
+  console.log('✅ Delivery methods ready (Standard on; Express and Local delivery can be switched on in Admin → Delivery)'); // creates the default business settings document
   console.log('✅ Business settings ready (edit them in Admin → Business & Tax)');
 
   console.log('\n✅ Product images are pre-linked to files bundled in frontend/images/ — no upload needed to launch.');

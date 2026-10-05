@@ -126,3 +126,21 @@ Root Directory: `backend` (or blank if you upload only this folder's contents �
 **Environment variables** are unchanged; `RESEND_*` and `FIREBASE_SERVICE_ACCOUNT_JSON` remain optional. New order alerts are emailed to the *support email* saved in Admin → Business settings.
 
 **Reliability** — async route errors are forwarded to the error handler (`src/utils/asyncErrors.js`); stray promise rejections are logged instead of crashing the process.
+
+---
+
+## v4 additions
+**Delivery methods** (`models/DeliveryMethod.js`, `routes/delivery.js`, `routes/adminDelivery.js`): admin-managed methods (courier or own-team/manual), fee, free-above, ETA, COD allowed, PIN prefixes, on/off. `GET /api/delivery/options?pincode=&subtotal=&cod=` for checkout; checkout validates and prices the chosen method server-side and snapshots it on the order.
+**Order lifecycle** (`utils/orderStatus.js`, `services/orderService.js`): validated transitions, a timeline of events on every order, a server-built customer journey, atomic idempotent payment confirmation.
+**Payments** (`utils/paymentProvider.js`, `routes/payments.js`, `services/reconcile.js`): provider interface; idempotent webhooks (`/api/webhooks/razorpay`), amount verification, reconciliation job, refunds.
+**Returns** (`utils/returnStatus.js`): 10-step workflow, line-item returns, photos, restocking, refund linked to Razorpay.
+**Auth switches & OTP** (`routes/customerAuth.js`, `utils/otpService.js`): login / sign-up / OTP / guest / mandatory verification, all server-enforced.
+**Couriers** (`utils/courier/`): manual + Shiprocket adapter; keys encrypted (`utils/crypto.js`, needs `SECRETS_KEY`).
+**Notifications** (`utils/notifications.js`): deduped, logged, retried; email + WhatsApp Cloud adapters.
+**Also:** inventory ledger, purchase orders + supplier payments, analytics, audit log, request logging, background jobs (`jobs.js`).
+
+### Tests
+- `npm test` — unit + integration (no database needed): 52 tests.
+- `npm run test:e2e` — end-to-end against a MongoDB-compatible engine (`FERRET=1` with FerretDB on :27018, or `TEST_MONGO_URI` for any MongoDB): 43 tests.
+- `npm run dev:ui` — serves the real backend + storefront + admin on a throw-away database for browser testing (`tests/ui/*.ui.js`, need Playwright). **Never point these at a real database** — they drop it.
+- `npm run smoke` — post-deploy check against a live API.

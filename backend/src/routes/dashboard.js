@@ -7,6 +7,8 @@ const Customer = require('../models/Customer');
 const Return = require('../models/Return');
 const Supplier = require('../models/Supplier');
 const Quotation = require('../models/Quotation');
+const NotificationLog = require('../models/NotificationLog');
+const WebhookEvent = require('../models/WebhookEvent');
 const { getSettings } = require('../models/Settings');
 
 const IST_OFFSET_MS = 5.5 * 3600 * 1000;
@@ -56,20 +58,20 @@ router.get('/overview', async (req, res) => {
     Order.countDocuments({ createdAt: { $gte: today } }),
     Order.countDocuments({}),
     Order.aggregate([{ $group: { _id: '$orderStatus', count: { $sum: 1 } } }]),
-    Order.aggregate([
-      { $match: { ...PAID, createdAt: { $gte: d14 } } },
-      { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'Asia/Kolkata' } }, revenue: { $sum: '$total' }, orders: { $sum: 1 } } },
-    ]),
-    Order.aggregate([
-      { $match: PAID }, { $unwind: '$items' },
-      { $group: { _id: '$items.name', units: { $sum: '$items.qty' }, revenue: { $sum: { $multiply: ['$items.price', '$items.qty'] } } } },
-      { $sort: { revenue: -1 } }, { $limit: 5 },
-    ]),
-    Product.find({ status: 'active', $expr: { $lte: ['$stock', '$lowStockThreshold'] } }).select('name sku stock lowStockThreshold images').limit(10),
+    // portable (works on any MongoDB-compatible engine): bucket the last 14 days by India-time day in code
+    Order.find({ ...PAID, createdAt: { $gte: d14 } }).select('createdAt total').lean().then((rows) => {
+      const m = {}; for (const o of rows) { const k = new Date(new Date(o.createdAt).getTime() + IST_OFFSET_MS).toISOString().slice(0, 10); const e = m[k] || (m[k] = { _id: k, revenue: 0, orders: 0 }); e.revenue += o.total; e.orders++; }
+      return Object.values(m);
+    }),
+    Order.aggregate([{ $match: PAID }, { $unwind: '$items' }, { $group: { _id: { name: '$items.name', price: '$items.price' }, units: { $sum: '$items.qty' } } }]).then((rows) => {
+      const m = {}; for (const r of rows) { const e = m[r._id.name] || (m[r._id.name] = { _id: r._id.name, units: 0, revenue: 0 }); e.units += r.units; e.revenue += r.units * r._id.price; }
+      return Object.values(m).sort((x, y) => y.revenue - x.revenue).slice(0, 5);
+    }),
+    Product.find({ status: 'active' }).select('name sku stock lowStockThreshold images').lean().then((ps) => ps.filter((p) => p.stock <= p.lowStockThreshold).slice(0, 10)),
     Order.find().sort({ createdAt: -1 }).limit(6).select('orderNumber customer total orderStatus paymentStatus payment createdAt'),
     Customer.find().sort({ createdAt: -1 }).limit(5).select('name phone email createdAt'),
     Customer.countDocuments({}),
-    Return.countDocuments({ status: { $in: ['Requested', 'Approved', 'PickedUp'] } }),
+    Return.countDocuments({ status: { $in: ['REQUESTED', 'APPROVED', 'PICKUP_SCHEDULED', 'PICKED_UP', 'RECEIVED', 'INSPECTION', 'REFUND_PENDING', 'Requested', 'Approved', 'PickedUp'] } }),
     Cart.countDocuments({ status: 'abandoned' }),
     Order.aggregate([
       { $match: { 'payment.method': 'cod', paymentStatus: 'Pending', orderStatus: { $nin: ['Cancelled', 'Refunded'] } } },
@@ -96,7 +98,23 @@ router.get('/overview', async (req, res) => {
   const byStatus = Object.fromEntries(byStatusAgg.map(s => [s._id, s.count]));
   const env = process.env;
 
+  const [paidToday, pendingToday, failedToday, toReview, refundsPending, awaitingPickup, inTransit, shipErrors, failedNotifs, failedHooks, pendingPay] = await Promise.all([
+    Order.countDocuments({ paymentStatus: 'Paid', 'payment.verifiedAt': { $gte: today } }),
+    Order.countDocuments({ paymentStatus: 'Pending', 'payment.method': { $ne: 'cod' }, orderStatus: 'Pending', createdAt: { $gte: today } }),
+    Order.countDocuments({ paymentStatus: 'Failed', createdAt: { $gte: today } }),
+    Return.countDocuments({ status: { $in: ['REQUESTED', 'Requested'] } }),
+    Return.countDocuments({ status: 'REFUND_PENDING' }),
+    Order.countDocuments({ 'shipment.awb': { $ne: '' }, orderStatus: { $in: ['Paid', 'Processing', 'Packed'] } }),
+    Order.countDocuments({ orderStatus: { $in: ['Dispatched', 'InTransit', 'OutForDelivery'] } }),
+    Order.countDocuments({ 'shipment.error': { $ne: '' }, orderStatus: { $nin: ['Cancelled', 'Delivered', 'Refunded'] } }),
+    NotificationLog.countDocuments({ status: 'failed', createdAt: { $gte: new Date(Date.now() - 7 * 86400e3) } }),
+    WebhookEvent.countDocuments({ status: 'failed', createdAt: { $gte: new Date(Date.now() - 7 * 86400e3) } }),
+    Order.countDocuments({ paymentStatus: { $in: ['Pending', 'Failed'] }, 'payment.method': { $ne: 'cod' }, orderStatus: 'Pending' }),
+  ]);
+  const extra = { payments: { paidToday, pendingToday, failedToday, pendingTotal: pendingPay }, returnsToReview: toReview, refundsPending, awaitingPickup, inTransit, health: { shipmentErrors: shipErrors, failedNotifications: failedNotifs, failedWebhooks: failedHooks } };
+
   res.json({
+    ...extra,
     revenue: { today: revToday.total, last7: rev7.total, last30: rev30.total, allTime: revAll.total },
     paidOrders: { today: revToday.count, last30: rev30.count, allTime: revAll.count },
     avgOrderValue: revAll.count ? revAll.total / revAll.count : 0,
