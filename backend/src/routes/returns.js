@@ -5,6 +5,7 @@ const Return = require('../models/Return');
 const { getSettings } = require('../models/Settings');
 const { createNotification } = require('../models/Notification');
 const { requireCustomer } = require('../middleware/customerAuth');
+const { ownedOrdersFilter } = require('../utils/ownership');
 const { eligibleQuantities, refundableAmount, customerJourney, normalize } = require('../utils/returnStatus');
 const { notifyOrder } = require('../services/notifier');
 const { audit } = require('../models/AuditLog');
@@ -13,7 +14,7 @@ const MAX_IMAGES = 4, MAX_IMAGE_CHARS = 900000;
 const REASONS = ['Damaged on arrival', 'Defective or not working', 'Wrong item received', 'Not as described', 'Quality not as expected', 'Changed my mind', 'Other'];
 
 async function ownedOrder(req, id) {
-  const o = await Order.findOne({ _id: id, $or: [{ customerId: req.customer.id }, ...(req.customer.phone ? [{ 'customer.phone': req.customer.phone }] : [])] });
+  const o = await Order.findOne({ _id: id, ...ownedOrdersFilter(req.customer) });
   return o;
 }
 function windowState(order, settings) {

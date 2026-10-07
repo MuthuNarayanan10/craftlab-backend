@@ -78,4 +78,4 @@ async function start() {
   } else { for (const m of models) if (m.init) await m.init(); }
 }
 async function stop() { await mongoose.disconnect(); }
-module.exports = { start, stop, FERRET };
+module.exports = { start, stop, FERRET, installShim };

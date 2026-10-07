@@ -5,6 +5,8 @@ const Order = require('../models/Order');
 const { requireRole } = require('../middleware/adminAuth');
 const { STATUSES, LABEL, canTransition, allowedNext, normalize } = require('../utils/returnStatus');
 const { issueRefund, RefundError } = require('../utils/refundService');
+const rewards = require('../services/rewards');
+const { logger } = require('../utils/logger');
 const { getPaymentProvider } = require('../utils/paymentProvider');
 const { adjustStock } = require('../services/inventory');
 const { notifyOrder } = require('../services/notifier');
@@ -75,7 +77,18 @@ router.post('/:id/refund', requireRole('ADMIN'), async (req, res) => {
   const order = await Order.findById(ret.order);
   const amount = req.body.amount !== undefined ? Number(req.body.amount) : ret.amount;
   try {
-    const rec = await issueRefund(order, { amount, reason: ret.reason, actor: req.admin.email, returnId: ret.id, reference: String(req.body.reference || '') }, getPaymentProvider());
+    if ((order.refunds || []).some((r) => String(r.returnId) === String(ret.id) && r.status !== 'failed')) throw new RefundError('A refund has already been issued for this return', 409);
+    const wTotal = (order.wallet?.pointsValue || 0) + (order.wallet?.giftTotal || 0), refundable = order.total + wTotal - (order.refundedAmount || 0) - (order.wallet?.restored || 0);
+    if (amount > refundable) throw new RefundError(`Only ₹${refundable} is still refundable on this order`);
+    const split = rewards.refundSplit(order, amount); // part of the sale may have been paid with points / a gift card
+    if (!(amount > 0) || split.cash + split.wallet <= 0) throw new RefundError('Nothing left to refund on this order');
+    const rec = split.cash > 0
+      ? await issueRefund(order, { amount: split.cash, reason: ret.reason, actor: req.admin.email, returnId: ret.id, reference: String(req.body.reference || '') }, getPaymentProvider())
+      : { refundId: 'wallet', method: 'wallet', amount: split.wallet, status: 'processed', reason: ret.reason, reference: '', returnId: ret.id, createdAt: new Date(), actor: req.admin.email };
+    if (split.cash <= 0) { order.refunds.push(rec); pushEvent(order, { label: `₹${split.wallet} returned to the customer’s rewards wallet`, stage: '', actor: req.admin.email, public: true, type: 'refund' }); }
+    await rewards.onReturnRefund(order, split, amount).catch((e) => logger.error('rewards_refund_failed', { error: e.message }));
+    ret.walletRefund = split.wallet;
+    if (order.refundedAmount >= order.total && (order.wallet?.restored || 0) + split.wallet >= (order.wallet?.pointsValue || 0) + (order.wallet?.giftTotal || 0)) order.paymentStatus = 'Refunded';
     if (order.paymentStatus === 'Refunded') { order.orderStatus = 'Refunded'; pushEvent(order, { label: 'Order fully refunded', actor: req.admin.email, type: 'status' }); }
     await order.save();
     ret.refund = { amount: rec.amount, refundId: rec.refundId, status: rec.status, issuedAt: new Date() };

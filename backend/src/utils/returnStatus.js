@@ -58,8 +58,10 @@ function eligibleQuantities(order, existingReturns) {
 function refundableAmount(order, lines) {
   const itemsValue = lines.reduce((s, l) => s + l.price * l.qty, 0);
   if (!order.subtotal || itemsValue <= 0) return 0;
-  const base = order.total - (order.codFee || 0) - (order.shipping || 0);
-  return Math.min(Math.round(base * (itemsValue / order.subtotal)), Math.max(0, order.total - (order.refundedAmount || 0)));
+  const wallet = (order.wallet?.pointsValue || 0) + (order.wallet?.giftTotal || 0);   // part of the sale that was paid with points / gift cards
+  const sale = order.total + wallet, base = sale - (order.codFee || 0) - (order.shipping || 0);
+  const left = sale - (order.refundedAmount || 0) - (order.wallet?.restored || 0);
+  return Math.max(0, Math.min(Math.round(base * (itemsValue / order.subtotal)), left));
 }
 
 module.exports = { STATUSES, LABEL, normalize, canTransition, allowedNext, customerJourney, eligibleQuantities, refundableAmount };

@@ -8,18 +8,20 @@ const { getSettings } = require('../models/Settings');
 const generateOrderNumber = require('../utils/generateOrderNumber');
 const { getPaymentProvider } = require('../utils/paymentProvider');
 const { optionalCustomer } = require('../middleware/customerAuth');
-const { finalizeCodOrder } = require('../services/orderService');
+const { finalizeCodOrder, confirmPayment } = require('../services/orderService');
 const { releaseHold } = require('../services/checkoutHold');
 const DeliveryMethod = require('../models/DeliveryMethod');
+const { channelOf } = require('../utils/otpChannel');
+const { checkPincode } = require('../services/serviceability');
+const reservations = require('../services/reservations');
+const rewards = require('../services/rewards');
+const RM = require('../utils/rewardsMath');
 const { isServiceable, feeFor, snapshot, estimatedDate, applicableMethods } = require('../utils/delivery');
 const { logger } = require('../utils/logger');
 const { audit } = require('../models/AuditLog');
 
-async function reserveStock(productId, qty) {
-  const r = await Product.findOneAndUpdate({ _id: productId, $expr: { $gte: [{ $subtract: ['$stock', '$reserved'] }, qty] } }, { $inc: { reserved: qty } }, { new: true });
-  return !!r;
-}
-const releaseStock = (productId, qty) => Product.findByIdAndUpdate(productId, { $inc: { reserved: -qty } });
+const reserveStock = reservations.reserveUnits;
+const releaseStock = reservations.releaseUnits;
 
 async function validateCoupon(code, subtotal) {
   if (!code) return { discount: 0, coupon: null };
@@ -41,7 +43,9 @@ router.post('/', optionalCustomer, async (req, res) => {
   const customerAcct = req.customer || null;
 
   // ---- who may check out (settings are enforced here, not just hidden in the UI) ----
-  if (settings.requireMobileVerification && !(customerAcct && customerAcct.phoneVerified)) return res.status(401).json({ error: 'Please verify your mobile number with an OTP to continue', code: 'LOGIN_REQUIRED' });
+  const viaEmail = channelOf(settings) === 'email';
+  const contactVerified = !!customerAcct && (viaEmail ? customerAcct.emailVerified : customerAcct.phoneVerified);
+  if (settings.requireMobileVerification && !contactVerified) return res.status(401).json({ error: viaEmail ? 'Please verify your email with a one-time code to continue' : 'Please verify your mobile number with an OTP to continue', code: 'LOGIN_REQUIRED' });
   if (!settings.guestCheckoutEnabled && !customerAcct) return res.status(401).json({ error: 'Please log in to place an order', code: 'LOGIN_REQUIRED' });
 
   const { cartId, customer, address, couponCode, giftMessage } = req.body;
@@ -59,7 +63,9 @@ router.post('/', optionalCustomer, async (req, res) => {
   }
 
   // a verified account's phone is the order's phone
-  const phone = settings.requireMobileVerification && customerAcct?.phone ? customerAcct.phone : cleanPhone(customer?.phone);
+  // a verified contact is the one the order uses — never what the browser sent
+  const phone = settings.requireMobileVerification && !viaEmail && customerAcct?.phone ? customerAcct.phone : cleanPhone(customer?.phone);
+  if (settings.requireMobileVerification && viaEmail && customerAcct?.email) customer.email = customerAcct.email;
   if (!str(customer?.name, 100).trim() || !phone || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(customer?.email || ''))) {
     return res.status(400).json({ error: 'Please enter your name, a valid 10-digit mobile number and email' });
   }
@@ -67,6 +73,11 @@ router.post('/', optionalCustomer, async (req, res) => {
     return res.status(400).json({ error: 'Please enter a complete delivery address with a valid 6-digit PIN code' });
   }
   if (paymentMethod === 'cod' && !settings.codEnabled) return res.status(400).json({ error: 'Cash on Delivery is not available right now. Please pay online.' });
+
+  // ---- can we deliver to this PIN at all (admin's PIN registry), and is cash allowed there? ----
+  const svc = await checkPincode(address.pincode, { cod: paymentMethod === 'cod' });
+  if (!svc.serviceable) return res.status(400).json({ error: `${svc.reason || 'Delivery isn’t available'} (PIN ${address.pincode}). Please use a different address.`, code: 'NOT_SERVICEABLE' });
+  if (paymentMethod === 'cod' && !svc.codAvailable) return res.status(400).json({ error: `Cash on Delivery isn’t available for PIN ${address.pincode}. Please pay online.`, code: 'COD_UNAVAILABLE' });
 
   // ---- delivery method: must exist, be switched on, serve this PIN and (for COD) allow cash ----
   const allMethods = await DeliveryMethod.listAll();
@@ -80,12 +91,20 @@ router.post('/', optionalCustomer, async (req, res) => {
   const cart = await Cart.findOne({ cartId }).populate('items.product');
   if (!cart || !cart.items.length) return res.status(400).json({ error: 'Your cart is empty' });
 
-  // ---- reserve stock atomically (never oversell, even with simultaneous buyers) ----
+  // ---- stock: use the hold made when the customer entered checkout; reserve anything it doesn't cover. All atomic — never oversells. ----
   const reserved = [];
+  const rollback = async () => { for (const r of reserved) await releaseStock(r.productId, r.qty).catch(() => {}); };
+  for (const item of cart.items) if (!item.product || item.product.status !== 'active') return res.status(400).json({ error: `${item.product?.name || 'An item'} is no longer available` });
+  const held = await reservations.takeForCheckout(cartId, cart.items.map((i) => ({ product: i.product._id, qty: i.qty })));
+  for (const h of held) reserved.push({ productId: h.product, qty: h.qty });
   for (const item of cart.items) {
-    if (!item.product || item.product.status !== 'active') { for (const r of reserved) await releaseStock(r.productId, r.qty); return res.status(400).json({ error: `${item.product?.name || 'An item'} is no longer available` }); }
-    if (!(await reserveStock(item.product._id, item.qty))) { for (const r of reserved) await releaseStock(r.productId, r.qty); return res.status(409).json({ error: `Not enough stock for ${item.product.name}` }); }
-    reserved.push({ productId: item.product._id, qty: item.qty });
+    const have = reserved.filter((r) => String(r.productId) === String(item.product._id)).reduce((n, r) => n + r.qty, 0);
+    const need = item.qty - have;
+    if (need <= 0) continue;
+    let ok = await reserveStock(item.product._id, need);
+    if (!ok) { await reservations.expireReservations(); ok = await reserveStock(item.product._id, need); } // other customers' expired holds may be blocking
+    if (!ok) { await rollback(); return res.status(409).json({ error: `Not enough stock for ${item.product.name}`, code: 'OUT_OF_STOCK' }); }
+    reserved.push({ productId: item.product._id, qty: need });
   }
 
   let order = null;
@@ -94,10 +113,24 @@ router.post('/', optionalCustomer, async (req, res) => {
     const subtotal = cart.items.reduce((s, i) => s + i.product.price * i.qty, 0);
     const { discount, coupon } = await validateCoupon(couponCode, subtotal);
     const afterCoupon = Math.max(0, subtotal - discount);
-    const prepaidDiscount = paymentMethod === 'online' && settings.prepaidDiscountPercent > 0 ? Math.round(afterCoupon * settings.prepaidDiscountPercent / 100) : 0;
-    const codFee = paymentMethod === 'cod' ? (settings.codFee || 0) : 0;
     const shippingFee = feeFor(method, afterCoupon);
-    const total = afterCoupon - prepaidDiscount + shippingFee + codFee;
+    // wallet: points (logged-in only) and gift cards (anyone) can pay part — or all — of the order
+    if ((req.body.giftCardCodes || []).length && settings.giftCardsEnabled === false) throw new Error('Gift cards are not being accepted right now');
+    const { cards, invalid } = await rewards.loadGiftCards(req.body.giftCardCodes);
+    if (invalid.length) throw new Error(`Gift card ${invalid[0]} can’t be used — it is invalid, expired or has no balance`);
+    const asked = req.body.usePoints === true ? Infinity : Number(req.body.usePoints) || 0;
+    if (asked > 0 && !customerAcct) throw new Error('Log in to use your reward points');
+    const price = (method_) => {
+      const prepaid = method_ === 'online' && settings.prepaidDiscountPercent > 0 ? Math.round(afterCoupon * settings.prepaidDiscountPercent / 100) : 0;
+      const fee = method_ === 'cod' ? (settings.codFee || 0) : 0;
+      return { prepaidDiscount: prepaid, codFee: fee, wp: RM.plan({ goodsPayable: afterCoupon - prepaid, shipping: shippingFee, codFee: fee, pointsRequested: asked, balance: customerAcct ? (customerAcct.rewardPoints || 0) : 0, giftCards: cards, settings }) };
+    };
+    let priced = price(paymentMethod);
+    let walletOnly = false;
+    if (priced.wp.cashTotal === 0 && priced.wp.walletTotal > 0) { walletOnly = true; priced = price('online'); } // fully covered by points / gift cards: treated as a prepaid order, nothing to collect
+    const { prepaidDiscount, codFee, wp } = priced;
+    const total = wp.cashTotal;
+    const earn = customerAcct ? RM.earnFor({ eligible: wp.eligible, paymentMethod: walletOnly ? 'online' : paymentMethod, settings }) : { points: 0, cashback: 0 };
     const attr = req.body.attribution || {};
 
     const build = (orderNumber) => Order.create({
@@ -106,7 +139,8 @@ router.post('/', optionalCustomer, async (req, res) => {
       address: { line1: str(address.line1, 200), line2: str(address.line2, 200), city: str(address.city, 80), state: str(address.state, 80), pincode: address.pincode, country: 'India' },
       items: cart.items.map((i) => ({ product: i.product._id, name: i.product.name, sku: i.product.sku, price: i.product.price, qty: i.qty, image: i.product.images?.[0] || '' })),
       subtotal, shipping: shippingFee, discount, prepaidDiscount, codFee, couponCode: coupon ? coupon.code : '', total, cartId, giftMessage: str(giftMessage, 300),
-      payment: { method: paymentMethod === 'cod' ? 'cod' : '' },
+      payment: { method: walletOnly ? 'wallet' : paymentMethod === 'cod' ? 'cod' : '' },
+      wallet: { pointsUsed: wp.pointsUsed, pointsValue: wp.pointsValue, giftCards: wp.gift.map((g) => ({ card: g.id, code: g.code, amount: g.amount })), giftTotal: wp.giftTotal, pointsEarned: earn.points, cashbackEarned: earn.cashback },
       delivery: { method: snapshot(method, afterCoupon) }, estimatedDelivery: estimatedDate(method),
       attribution: { source: str(attr.source, 40).toLowerCase(), medium: str(attr.medium, 40).toLowerCase(), campaign: str(attr.campaign, 60), referrer: str(attr.referrer, 80) },
       events: [{ label: 'Order placed', stage: 'placed', actor: 'customer', type: 'placed' }],
@@ -119,6 +153,13 @@ router.post('/', optionalCustomer, async (req, res) => {
       if (!ok) throw new Error('Coupon usage limit reached');
     }
 
+    if (wp.walletTotal > 0) await rewards.takeWallet(order, wp, customerAcct); // atomic; throws (and undoes itself) if a balance changed
+    await Order.updateOne({ _id: order._id }, { $set: { 'wallet.taken': order.wallet.taken } });
+
+    if (walletOnly) { // nothing left to pay: confirm as paid right now
+      await confirmPayment(order.id, { paymentId: 'wallet', method: 'rewards wallet', via: 'wallet', actor: 'customer' });
+      return res.status(201).json({ paid: true, cod: false, orderId: order.id, orderNumber: order.orderNumber, total: 0 });
+    }
     if (paymentMethod === 'cod') {
       await finalizeCodOrder(order);
       return res.status(201).json({ cod: true, orderId: order.id, orderNumber: order.orderNumber, total });
@@ -135,6 +176,18 @@ router.post('/', optionalCustomer, async (req, res) => {
     res.status(400).json({ error: errorMessage(err) });
   }
 });
+
+// POST /api/checkout/reserve {cartId} — the customer entered checkout: validate stock and hold it for stockHoldMinutes
+router.post('/reserve', async (req, res) => {
+  const cart = await Cart.findOne({ cartId: String(req.body.cartId || '') }).populate('items.product');
+  if (!cart || !cart.items.length) return res.status(400).json({ error: 'Your cart is empty' });
+  const r = await reservations.reserveCart(cart);
+  if (r.error) return res.status(409).json({ error: r.error.message, code: r.error.code, productId: r.error.productId, available: r.error.available });
+  const secondsLeft = Math.max(0, Math.round((r.reservation.expiresAt - Date.now()) / 1000));
+  res.json({ reserved: true, reused: r.reused, expiresAt: r.reservation.expiresAt, secondsLeft, holdMinutes: Math.round(secondsLeft / 60) });
+});
+// DELETE-style release when the customer leaves checkout (POST so navigator.sendBeacon can use it)
+router.post('/reserve/release', async (req, res) => res.json({ released: await reservations.releaseCart(String(req.body.cartId || '')) }));
 
 // POST /api/checkout/:orderId/cancel — the customer closed the payment window before paying
 router.post('/:orderId/cancel', async (req, res) => {

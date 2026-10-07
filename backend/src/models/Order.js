@@ -24,7 +24,7 @@ const eventSchema = new mongoose.Schema({
 
 const refundSchema = new mongoose.Schema({
   refundId: { type: String, default: '' },
-  method: { type: String, enum: ['razorpay', 'manual'], default: 'razorpay' },
+  method: { type: String, enum: ['razorpay', 'manual', 'wallet'], default: 'razorpay' },
   amount: { type: Number, required: true },
   status: { type: String, enum: ['pending', 'processed', 'failed'], default: 'pending' },
   reason: { type: String, default: '' },
@@ -70,16 +70,28 @@ const orderSchema = new mongoose.Schema({
   orderStatus: { type: String, enum: STATUSES, default: 'Pending' },
 
   payment: {
-    method: { type: String, default: '' }, // '' (online, method decided by Razorpay) | 'cod'
+    method: { type: String, default: '' }, // '' (online, method decided by Razorpay) | 'cod' | 'wallet' (fully paid with points / gift cards)
     razorpayOrderId: { type: String, default: '' },
     razorpayPaymentId: { type: String, default: '' },
     razorpaySignature: { type: String, default: '' },
     razorpayMethod: { type: String, default: '' }, // upi / card / netbanking / wallet — as reported by Razorpay
     verifiedAt: { type: Date, default: null },
-    verifiedVia: { type: String, enum: ['', 'checkout-callback', 'webhook', 'reconcile'], default: '' },
+    verifiedVia: { type: String, enum: ['', 'checkout-callback', 'webhook', 'reconcile', 'wallet'], default: '' },
   },
   refunds: [refundSchema],
   refundedAmount: { type: Number, default: 0 },
+  // Rewards wallet: points and gift cards that paid part of this order. `total` is always the CASH/online amount still to pay.
+  wallet: {
+    pointsUsed: { type: Number, default: 0 }, pointsValue: { type: Number, default: 0 },
+    giftCards: [{ card: { type: mongoose.Schema.Types.ObjectId, ref: 'GiftCard' }, code: String, amount: Number, restored: { type: Number, default: 0 }, _id: false }],
+    giftTotal: { type: Number, default: 0 },
+    taken: { type: Boolean, default: false },            // points / gift-card balance has actually been deducted
+    restored: { type: Number, default: 0 },              // ₹ of wallet value already given back (cancellations, returns)
+    pointsEarned: { type: Number, default: 0 }, cashbackEarned: { type: Number, default: 0 },   // planned at checkout
+    earnStatus: { type: String, enum: ['none', 'pending', 'credited', 'void'], default: 'none' },
+    earnReversed: { type: Number, default: 0 },          // points clawed back because of returns
+    creditedAt: { type: Date, default: null },
+  },
 
   delivery: { // how it travels: the method the customer chose (snapshot) + manual dispatch details
     method: { key: { type: String, default: '' }, name: { type: String, default: '' }, type: { type: String, default: '' }, fee: { type: Number, default: 0 }, etaMinDays: { type: Number, default: 0 }, etaMaxDays: { type: Number, default: 0 }, courierProvider: { type: String, default: '' } },
@@ -118,6 +130,7 @@ orderSchema.methods.toJSON = function () {
   obj.id = obj._id.toString();
   delete obj._id; delete obj.__v;
   if (obj.payment) delete obj.payment.razorpaySignature;
+  if (obj.wallet?.giftCards) obj.wallet.giftCards = obj.wallet.giftCards.map((g) => ({ code: 'GC-••••-••••-' + String(g.code || '').slice(-4), amount: g.amount, restored: g.restored || 0 })); // bearer codes must never leak
   return obj;
 };
 

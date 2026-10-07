@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const customer = await Customer.findById(req.params.id);
   if (!customer) return res.status(404).json({ error: 'Customer not found' });
-  const orders = await Order.find({ $or: [{ customerId: customer._id }, ...(customer.phone ? [{ 'customer.phone': customer.phone }] : [])] }).select('orderNumber total orderStatus paymentStatus createdAt').sort({ createdAt: -1 }).limit(50);
+  const orders = await Order.find({ $or: [{ customerId: customer._id }, ...(customer.phoneVerified && customer.phone ? [{ 'customer.phone': customer.phone }] : []), ...(customer.emailVerified && customer.email ? [{ 'customer.email': customer.email }] : [])] }).select('orderNumber total orderStatus paymentStatus createdAt').sort({ createdAt: -1 }).limit(50);
   res.json({ ...customer.toJSON(), orders: orders.map((o) => o.toJSON()) });
 });
 

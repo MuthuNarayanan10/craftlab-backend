@@ -7,6 +7,7 @@ const adminSchema = new mongoose.Schema({
   passwordHash: { type: String, required: true },
   role: { type: String, enum: ['ADMIN', 'STAFF'], default: 'STAFF' },
   active: { type: Boolean, default: true },
+  lastLoginAt: { type: Date, default: null },
   failedLogins: { type: Number, default: 0 },
   lockUntil: { type: Date, default: null },
 }, { timestamps: true });

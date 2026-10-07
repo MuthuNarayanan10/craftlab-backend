@@ -1,6 +1,8 @@
 const test = require('node:test'); const assert = require('node:assert/strict');
 const { createOtpService, normalizePhone, OtpError } = require('../src/utils/otpService');
-const { devSender, msg91Sender } = require('../src/utils/otp/senders');
+const { devSender, msg91Sender, brevoSender, zeptomailSender } = require('../src/utils/otp/senders');
+const { channelOf } = require('../src/utils/otpChannel');
+const { normalizeEmail } = require('../src/utils/otpService');
 
 function memStore() {
   const rows = []; let n = 0;
@@ -18,7 +20,7 @@ function memStore() {
 function make(opts = {}) {
   let t = 1_000_000; const store = memStore(); const sent = [];
   const sender = opts.sender || { id: 'dev', send: async (p, c) => sent.push({ p, c }) };
-  const svc = createOtpService({ store, sender, hmacSecret: 'h', now: () => t, isProduction: !!opts.prod, config: opts.config });
+  const svc = createOtpService({ store, sender, hmacSecret: 'h', now: () => t, isProduction: !!opts.prod, config: opts.config, channel: opts.channel });
   return { svc, store, sent, advance: (ms) => { t += ms; } };
 }
 
@@ -81,4 +83,29 @@ test('senders: dev refused in production; MSG91 request shape + error handling',
   const bad = msg91Sender({ authKey: 'K', templateId: 'T', fetchImpl: async () => ({ ok: true, json: async () => ({ type: 'error', message: 'DLT template mismatch' }) }) });
   await assert.rejects(bad.send('+919876543210', '1'), /DLT template mismatch/);
   assert.throws(() => msg91Sender({}), /auth key/);
+});
+
+test('email OTP: normalisation, send/verify by email, same safety limits, generic wording', async () => {
+  assert.equal(normalizeEmail('  Asha.K@Example.COM '), 'asha.k@example.com'); for (const bad of ['', 'nope', 'a@b', '@x.com', 'a b@x.com', null]) assert.equal(normalizeEmail(bad), null);
+  const { svc, sent, advance } = make({ channel: 'email' });
+  await assert.rejects(svc.send('9876543210'), (e) => e.code === 'INVALID_EMAIL' && /valid email/.test(e.message));
+  const r = await svc.send('Asha@Example.com', '1.1.1.1'); assert.equal(r.identifier, 'asha@example.com'); assert.equal(sent[0].p, 'asha@example.com'); assert.match(sent[0].c, /^\d{6}$/);
+  await assert.rejects(svc.send('asha@example.com'), (e) => e.code === 'COOLDOWN');
+  await assert.rejects(svc.verify('asha@example.com', sent[0].c === '000000' ? '111111' : '000000'), (e) => e.code === 'INVALID');
+  assert.deepEqual(await svc.verify('ASHA@example.com', sent[0].c), { phone: 'asha@example.com' }, 'case-insensitive email, single use'); await assert.rejects(svc.verify('asha@example.com', sent[0].c), (e) => e.code === 'NO_OTP');
+  const cap = make({ channel: 'email', config: { resendCooldownMs: 0 } }); for (let i = 0; i < 5; i++) await cap.svc.send('x@y.com', '2.2.2.2'); await assert.rejects(cap.svc.send('x@y.com', '2.2.2.2'), (e) => e.code === 'TOO_MANY_PHONE' && /email address/.test(e.message));
+});
+test('which channel a provider uses', () => {
+  assert.equal(channelOf({ otpProvider: 'brevo' }), 'email'); assert.equal(channelOf({ otpProvider: 'zeptomail' }), 'email'); assert.equal(channelOf({ otpProvider: 'msg91' }), 'phone'); assert.equal(channelOf({ otpProvider: 'firebase' }), 'phone');
+  assert.equal(channelOf({ otpProvider: 'dev', otpChannel: 'email' }), 'email'); assert.equal(channelOf({ otpProvider: 'dev', otpChannel: 'sms' }), 'phone');
+});
+test('Brevo + ZeptoMail senders: request shape, region, token format, error surfacing', async () => {
+  const calls = []; const fx = (ok = true, body = {}) => async (url, init) => { calls.push({ url, init, body: JSON.parse(init.body) }); return { ok, status: ok ? 201 : 401, json: async () => body }; };
+  const b = brevoSender({ apiKey: 'KEY', senderEmail: 'care@shop.in', senderName: 'Shop', fetchImpl: fx() }); await b.send('c@x.com', '482913');
+  assert.equal(calls[0].url, 'https://api.brevo.com/v3/smtp/email'); assert.equal(calls[0].init.headers['api-key'], 'KEY'); assert.deepEqual(calls[0].body.to, [{ email: 'c@x.com' }]); assert.deepEqual(calls[0].body.sender, { name: 'Shop', email: 'care@shop.in' }); assert.match(calls[0].body.subject, /^482913 is your Shop login code/); assert.match(calls[0].body.htmlContent, /482913/);
+  await assert.rejects(brevoSender({ apiKey: 'K', senderEmail: 's@x.in', fetchImpl: fx(false, { message: 'Sender not verified' }) }).send('c@x.com', '1'), /Sender not verified/); assert.throws(() => brevoSender({ apiKey: 'K' }), /sender/);
+  const z = zeptomailSender({ sendMailToken: 'abc123', senderEmail: 'care@shop.in', fetchImpl: fx() }); await z.send('c@x.com', '777111'); const zc = calls.at(-1);
+  assert.equal(zc.url, 'https://api.zeptomail.in/v1.1/email', 'India data centre by default'); assert.equal(zc.init.headers.Authorization, 'Zoho-enczapikey abc123'); assert.deepEqual(zc.body.to, [{ email_address: { address: 'c@x.com' } }]); assert.equal(zc.body.from.address, 'care@shop.in'); assert.match(zc.body.htmlbody, /777111/);
+  await zeptomailSender({ sendMailToken: 'Zoho-enczapikey already', senderEmail: 's@x.in', region: 'com', fetchImpl: fx() }).send('c@x.com', '1'); assert.equal(calls.at(-1).url, 'https://api.zeptomail.com/v1.1/email'); assert.equal(calls.at(-1).init.headers.Authorization, 'Zoho-enczapikey already', 'token prefix not doubled');
+  await assert.rejects(zeptomailSender({ sendMailToken: 't', senderEmail: 's@x.in', fetchImpl: fx(false, { error: { message: 'Invalid token' } }) }).send('c@x.com', '1'), /Invalid token/);
 });

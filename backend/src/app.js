@@ -9,12 +9,17 @@ const { requireAdmin } = require('./middleware/adminAuth');
 const { requestLogger, logger } = require('./utils/logger');
 const { sanitizeRequest } = require('./utils/sanitize');
 
+const FRONTEND_CSP_REPORT_ONLY = "default-src 'self'; script-src 'self' 'unsafe-inline' https://checkout.razorpay.com https://www.gstatic.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://api.postalpincode.in https://api.razorpay.com https://lumberjack.razorpay.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; frame-src https://api.razorpay.com https://checkout.razorpay.com https://*.firebaseapp.com; form-action 'self'; base-uri 'self'; object-src 'none'";
 function createApp() {
   const app = express();
   app.set('trust proxy', 1);          // behind Render/Cloudflare: real client IPs for rate limiting
   app.disable('x-powered-by');
   app.use(requestLogger);
-  app.use(helmet());
+  const serveFrontend = /^(1|true|yes)$/i.test(process.env.SERVE_FRONTEND || '');
+  // An API on its own can use Helmet's strict default policy. When this server ALSO serves the storefront/admin (Docker), those pages use
+  // inline scripts, Razorpay and Firebase, so an enforcing default would blank every page — use the same REPORT-ONLY policy as the Netlify setup.
+  app.use(helmet(serveFrontend ? { contentSecurityPolicy: false, crossOriginEmbedderPolicy: false, crossOriginResourcePolicy: { policy: 'same-site' } } : undefined));
+  if (serveFrontend) app.use((req, res, next) => { if (!req.path.startsWith('/api/')) res.set('Content-Security-Policy-Report-Only', FRONTEND_CSP_REPORT_ONLY); next(); });
   app.use(compression());
 
   // CORS — only the storefront/admin origins you list in CORS_ORIGIN may call the API from a browser.
@@ -30,7 +35,8 @@ function createApp() {
   }));
 
   // Rate limits: generous for browsing, strict for login / OTP / checkout (shared mobile networks mean one IP can be many people)
-  const limiter = (windowMin, max, message) => rateLimit({ windowMs: windowMin * 60e3, max, standardHeaders: true, legacyHeaders: false, message: { error: message || 'Too many requests. Please slow down and try again shortly.' } });
+  const scale = Math.max(1, Number(process.env.RATE_LIMIT_SCALE) || 1); // tests set this high; production leaves it at 1
+  const limiter = (windowMin, max, message) => rateLimit({ windowMs: windowMin * 60e3, max: max * scale, standardHeaders: true, legacyHeaders: false, message: { error: message || 'Too many requests. Please slow down and try again shortly.' } });
   app.use('/api/', limiter(15, 1500));
   app.use('/api/auth/login', limiter(15, 20, 'Too many login attempts. Try again in a few minutes.'));
   app.use(['/api/customers/login', '/api/customers/signup', '/api/customers/otp-login'], limiter(15, 20, 'Too many attempts. Try again in a few minutes.'));
@@ -38,6 +44,8 @@ function createApp() {
   app.use('/api/customers/otp/verify', limiter(15, 30, 'Too many verification attempts. Please wait a few minutes.'));
   app.use('/api/checkout', limiter(15, 60, 'Too many checkout attempts. Please wait a few minutes.'));
   app.use(['/api/contact', '/api/subscribers'], limiter(60, 20));
+  app.use('/api/rewards/gift-card', limiter(15, 15, 'Too many gift-card checks. Please try again later.'));
+  app.use('/api/support', (req, res, next) => (req.method === 'POST' && req.path === '/' ? limiter(60, 10, 'Too many requests. Please try again later or WhatsApp us.')(req, res, next) : next()));
 
   // Razorpay needs the RAW body to verify its signature, so it is mounted before any JSON parser.
   const payments = require('./routes/payments');
@@ -46,6 +54,7 @@ function createApp() {
   app.use('/api/returns', express.json({ limit: '8mb' }));          // customer damage photos
   app.use('/api/admin/products', express.json({ limit: '10mb' }));  // product photos (base64)
   app.use('/api/admin/purchase-orders', express.json({ limit: '3mb' })); // scanned supplier invoices
+  app.use('/api/admin/pincodes', express.json({ limit: '6mb' }));        // PIN-code CSV imports
   app.use(express.json({ limit: '2mb' }));
   app.use(sanitizeRequest);                                          // strips $operators from all input
 
@@ -66,6 +75,11 @@ function createApp() {
   app.use('/api/returns', require('./routes/returns'));
   app.use('/api/config', require('./routes/publicConfig'));
   app.use('/api/delivery', require('./routes/delivery'));
+  app.use('/api/pincode', require('./routes/pincode'));
+  app.use('/api/search', require('./routes/search'));
+  app.use('/api/collections', require('./routes/collections'));
+  app.use('/api/support', require('./routes/support'));
+  app.use('/api/rewards', require('./routes/rewards'));
   app.use('/api/webhooks', require('./routes/webhooks'));            // courier tracking pushes (shared-secret token)
   app.use('/api', require('./routes/publicForms'));                  // /subscribers, /contact
 
@@ -79,6 +93,10 @@ function createApp() {
   admin('products', 'adminProducts');
   admin('inventory', 'adminInventory');
   admin('delivery', 'adminDelivery');
+  admin('pincodes', 'adminPincodes');
+  admin('support', 'adminSupport');
+  admin('rewards', 'adminRewards');
+  admin('catalog', 'adminCatalog');
   admin('coupons', 'adminCoupons');
   admin('abandoned-carts', 'abandoned');
   admin('suppliers', 'adminSuppliers');
@@ -86,11 +104,18 @@ function createApp() {
   admin('purchase-orders', 'adminPurchaseOrders');
   admin('analytics', 'adminAnalytics');
   admin('integrations', 'adminIntegrations');
+  admin('team', 'adminTeam');
   admin('settings', 'adminSettings');
   admin('tax', 'adminTax');
   admin('subscribers', 'adminSubscribers');
   admin('notifications', 'adminNotifications');
   admin('', 'adminOps');                                              // /audit, /notification-log, /system/health
+
+  // Docker / single-server hosting: serve the storefront and admin from here too (API routes above always win)
+  if (/^(1|true|yes)$/i.test(process.env.SERVE_FRONTEND || '')) {
+    require('./frontendHost').mountFrontend(app);
+    app.use((req, res, next) => (req.path.startsWith('/api/') ? next() : res.status(404).type('html').send('<!doctype html><meta charset="utf-8"><title>Not found</title><body style="font-family:sans-serif;text-align:center;padding:12vh 20px"><h1>Page not found</h1><p><a href="/">Back to The Craft Lab</a></p>')));
+  }
 
   app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 

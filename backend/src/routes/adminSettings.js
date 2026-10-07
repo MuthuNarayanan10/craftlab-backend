@@ -5,10 +5,10 @@ const { requireRole } = require('../middleware/adminAuth');
 const { resetNotifierCache } = require('../services/notifier');
 const { audit } = require('../models/AuditLog');
 
-const TEXT = ['businessName', 'legalName', 'gstin', 'pan', 'address', 'city', 'state', 'pincode', 'phone', 'email', 'invoicePrefix', 'supportWhatsapp'];
-const NUM = { defaultTaxRate: [0, 100], codFee: [0, 10000], prepaidDiscountPercent: [0, 50], returnWindowDays: [0, 60] };
-const BOOL = ['codEnabled', 'customerLoginEnabled', 'customerSignupEnabled', 'otpEnabled', 'guestCheckoutEnabled', 'autoCreateAccounts', 'requireMobileVerification', 'autoCreateShipment', 'notifyEmailEnabled', 'notifyWhatsappEnabled', 'autoApproveReturns'];
-const ENUM = { otpProvider: ['none', 'dev', 'msg91', 'firebase'], defaultCourierProvider: ['manual', 'shiprocket'] };
+const TEXT = ['supportHours', 'businessName', 'legalName', 'gstin', 'pan', 'address', 'city', 'state', 'pincode', 'phone', 'email', 'invoicePrefix', 'supportWhatsapp'];
+const NUM = { rewardEarnPercent: [0, 50], rewardRedeemMaxPercent: [0, 100], rewardRedeemMinPoints: [0, 100000], cashbackPercent: [0, 50], cashbackMinOrder: [0, 1000000], stockHoldMinutes: [3, 60], defaultTaxRate: [0, 100], codFee: [0, 10000], prepaidDiscountPercent: [0, 50], returnWindowDays: [0, 60] };
+const BOOL = ['rewardsEnabled', 'giftCardsEnabled', 'codEnabled', 'customerLoginEnabled', 'customerSignupEnabled', 'otpEnabled', 'guestCheckoutEnabled', 'autoCreateAccounts', 'requireMobileVerification', 'autoCreateShipment', 'notifyEmailEnabled', 'notifyWhatsappEnabled', 'autoApproveReturns'];
+const ENUM = { pincodeCheckMode: ['off', 'registry'], otpProvider: ['none', 'dev', 'msg91', 'brevo', 'zeptomail', 'firebase'], otpChannel: ['sms', 'email'], defaultCourierProvider: ['manual', 'shiprocket'] };
 
 router.get('/', async (req, res) => res.json(await getSettings()));
 

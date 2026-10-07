@@ -1,6 +1,7 @@
 // Browser tests for the admin console against the REAL backend (tests/support/ui-server.js).
 const { chromium } = require('playwright');
 const CHROME = process.env.CHROME || '/home/claude/.cache/puppeteer/chrome/linux-131.0.6778.204/chrome-linux64/chrome';
+const FY = (() => { const d = new Date(Date.now() + 5.5 * 3600e3), y = d.getUTCFullYear(); return 'FY' + (d.getUTCMonth() >= 3 ? y : y - 1); })(); // current Indian financial year label
 const B = 'http://localhost:4000', SHOTS = process.env.SHOTS || '/tmp/shots2'; require('fs').mkdirSync(SHOTS, { recursive: true });
 let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log((c ? 'PASS' : 'FAIL') + '  ' + n + (x ? '  — ' + x : '')); };
 const api = async (path, opts = {}, token) => { const r = await fetch(B + '/api' + path, { ...opts, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}), ...(opts.headers || {}) }, body: opts.body ? JSON.stringify(opts.body) : undefined }); return { status: r.status, body: await r.json().catch(() => ({})) }; };
@@ -13,6 +14,7 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|api\.qrserver\.com/;
   const page = await ctx.newPage(); page.on('pageerror', (e) => errs.push(page.url().split('/').pop() + ': ' + e.message)); page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|ERR_/.test(m.text())) errs.push(page.url().split('/').pop() + ': ' + m.text()); });
   page.on('dialog', async (d) => { const m = d.message(); await d.accept(/Reason/i.test(m) ? 'test cancel' : /Refund amount/.test(m) ? undefined : /Mobile number/.test(m) ? '9999999999' : /payout|How did you/.test(m) ? 'UPI-TEST-1' : undefined); });
   const go = async (p) => { await page.goto(`${B}/admin/${p}`); await page.waitForTimeout(700); };
+  const until = async (fn, tries = 24) => { for (let i = 0; i < tries; i++) { try { if (await fn()) return true; } catch (e) {} await page.waitForTimeout(250); } return false; };
   const toast = async () => { await page.waitForSelector('#adminToast.show', { timeout: 6000 }); return page.locator('#adminToast').textContent(); };
 
   /* ---- login ---- */
@@ -31,33 +33,33 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|api\.qrserver\.com/;
   ok('delivery page lists Standard, Express and Local delivery with ON/OFF', await page.locator('.method-card').count() === 3 && (await page.locator('.method-card .badge:text-is("ON")').count()) === 3);
   await page.screenshot({ path: SHOTS + '/21-admin-delivery.png', fullPage: true });
   await page.locator('[data-toggle=manual] + span').click(); ok('toggling OFF is saved', /Switched OFF/.test(await toast()));
-  let methods = (await api('/admin/delivery', {}, owner)).body; ok('…and the API agrees', methods.find((m) => m.key === 'manual').enabled === false);
+  let methods = []; ok('…and the API agrees', await until(async () => (await api('/admin/delivery', {}, owner)).body.find((m) => m.key === 'manual').enabled === false));
   ok('the storefront no longer offers it', !(await (await fetch(B + '/api/delivery/options?pincode=600002&subtotal=2499')).json()).options.some((o) => o.key === 'manual'));
   await page.waitForTimeout(500); await page.locator('[data-toggle=manual] + span').click(); await page.waitForTimeout(700); ok('toggling back ON works', (await api('/admin/delivery', {}, owner)).body.find((m) => m.key === 'manual').enabled === true);
   await page.click('[data-edit=express]'); await page.fill('form[data-form=express] [name=fee]', '199'); await page.fill('form[data-form=express] [name=freeAbove]', '5000'); await page.click('form[data-form=express] button[type=submit]'); await toast();
-  methods = (await api('/admin/delivery', {}, owner)).body; ok('editing fee + free-above saves', methods.find((m) => m.key === 'express').fee === 199 && methods.find((m) => m.key === 'express').freeAbove === 5000);
+  ok('editing fee + free-above saves', await until(async () => { methods = (await api('/admin/delivery', {}, owner)).body; const e = methods.find((m) => m.key === 'express'); return e.fee === 199 && e.freeAbove === 5000; }));
   await page.click('#addBtn'); await page.fill('form[data-form=""] [name=name]', 'Same-day Chennai'); await page.selectOption('form[data-form=""] [name=type]', 'manual'); await page.fill('form[data-form=""] [name=fee]', '99'); await page.fill('form[data-form=""] [name=pincodePrefixes]', '600'); await page.fill('form[data-form=""] [name=etaMaxDays]', '1');
   await page.screenshot({ path: SHOTS + '/22-admin-delivery-new.png' }); await page.click('form[data-form=""] button[type=submit]'); await toast(); await page.waitForTimeout(500);
-  ok('a custom method can be added', (await api('/admin/delivery', {}, owner)).body.some((m) => m.key === 'same-day-chennai' && m.type === 'manual'));
+  ok('a custom method can be added', await until(async () => (await api('/admin/delivery', {}, owner)).body.some((m) => m.key === 'same-day-chennai' && m.type === 'manual')));
   await api('/admin/delivery/express', { method: 'PUT', body: { enabled: false } }, owner); await api('/admin/delivery/manual', { method: 'PUT', body: { enabled: false } }, owner); await api('/admin/delivery/same-day-chennai', { method: 'PUT', body: { enabled: false } }, owner);
   await go('delivery.html'); await page.locator('[data-toggle=standard] + span').click(); const t = await toast(); ok('the last method cannot be switched off', /at least one/i.test(t), t);
-  await page.click('[data-edit=same-day-chennai]'); await page.click('[data-delete=same-day-chennai]'); await toast(); ok('a custom method can be deleted', !(await api('/admin/delivery', {}, owner)).body.some((m) => m.key === 'same-day-chennai'));
+  await page.click('[data-edit=same-day-chennai]'); await page.click('[data-delete=same-day-chennai]'); let gone = false; for (let i = 0; i < 20 && !gone; i++) { await page.waitForTimeout(250); gone = !(await api('/admin/delivery', {}, owner)).body.some((m) => m.key === 'same-day-chennai'); } ok('a custom method can be deleted', gone);
   await api('/admin/delivery/express', { method: 'PUT', body: { enabled: true, fee: 149, freeAbove: 0 } }, owner); await api('/admin/delivery/manual', { method: 'PUT', body: { enabled: true } }, owner);
 
   /* ---- ORDERS ---- */
   await go('orders.html'); const rows = await page.locator('#ordersBody tr').count(); ok('orders list loads with delivery method column', rows >= 4 && /Local delivery by our team/.test(await page.locator('#ordersBody').textContent()));
-  await page.fill('#searchBox', 'CL-1003'); await page.waitForTimeout(900); ok('search narrows to one order', await page.locator('#ordersBody tr').count() === 1);
+  await page.fill('#searchBox', `${FY}CL003`); await page.waitForTimeout(900); ok('search narrows to one order', await page.locator('#ordersBody tr').count() === 1);
   await page.click('[data-manage]'); await page.waitForSelector('#orderModal.open #saveStatus'); await page.waitForTimeout(400);
   ok('manual order: delivery-person form with saved person; no courier controls', (await page.inputValue('#asName')) === 'Rajan' && await page.locator('#shipCreate').count() === 0);
   ok('timeline + journey are shown', await page.locator('.tl li').count() >= 6 && await page.locator('.stepline b').count() === 8);
   ok('status dropdown only offers valid next steps', (await page.locator('#mStatus option').allTextContents()).join('|').includes('Delivered') && !(await page.locator('#mStatus option').allTextContents()).join('|').includes('Pending'));
   await page.screenshot({ path: SHOTS + '/23-admin-order-manual.png' });
   await page.fill('#asName', 'Suresh'); await page.fill('#asPhone', '+919000000010'); await page.click('#saveAssignee'); await toast(); await page.waitForTimeout(600);
-  const oid = (await api('/admin/orders?q=CL-1003', {}, owner)).body.orders[0].id; ok('reassigning the delivery person saves', (await api('/admin/orders/' + oid, {}, owner)).body.delivery.assignee.name === 'Suresh');
+  const oid = (await api(`/admin/orders?q=${FY}CL003`, {}, owner)).body.orders[0].id; ok('reassigning the delivery person saves', (await api('/admin/orders/' + oid, {}, owner)).body.delivery.assignee.name === 'Suresh');
   await page.fill('#noteText', 'Customer asked for evening delivery'); await page.click('#noteInternal'); await toast(); await page.waitForTimeout(500); ok('internal note appears on the timeline, marked internal', /evening delivery/.test(await page.locator('.tl').textContent()) && await page.locator('.tl li.internal').count() >= 1);
   await page.selectOption('#mStatus', 'Delivered'); await page.click('#saveStatus'); await toast(); await page.waitForTimeout(600);
   ok('marking Delivered collects the COD cash and closes the order', (await api('/admin/orders/' + oid, {}, owner)).body.paymentStatus === 'Paid');
-  await page.keyboard.press('Escape'); await page.fill('#searchBox', 'CL-1001'); await page.waitForTimeout(900); await page.click('[data-manage]'); await page.waitForSelector('#shipCreate');
+  await page.keyboard.press('Escape'); await page.fill('#searchBox', `${FY}CL001`); await page.waitForTimeout(900); await page.click('[data-manage]'); await page.waitForSelector('#shipCreate');
   ok('courier order: booking controls present', await page.locator('#shipCreate').count() === 1 && await page.locator('#asName').count() === 0);
   await page.waitForSelector('#adminToast:not(.show)'); await page.click('#shipCreate'); const tt = await toast(); ok('booking without a connected courier explains what to do (no crash)', /Integrations/.test(tt), tt);
   await page.keyboard.press('Escape');
@@ -65,7 +67,7 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|api\.qrserver\.com/;
   /* ---- RETURNS: customer asks, admin walks it to a refund ---- */
   const deliv = (await api('/admin/orders?status=Delivered', {}, owner)).body.orders.find((o) => o.items[0].qty === 2);
   const rr = await api('/returns', { method: 'POST', body: { orderId: deliv.id, items: [{ index: 0, qty: 1 }], reason: 'Wrong item received' } }, cust); ok('(setup) customer requested a return', rr.status === 201);
-  await go('returns.html'); ok('returns list shows the request', /CL-1004/.test(await page.locator('#tableBody').textContent())); await page.click('[data-open]'); await page.waitForSelector('#rNext');
+  await go('returns.html'); ok('returns list shows the request', new RegExp(FY + 'CL004').test(await page.locator('#tableBody').textContent())); await page.click('[data-open]'); await page.waitForSelector('#rNext');
   await page.selectOption('#rNext', 'REJECTED'); await page.click('#rGo'); ok('rejection without a reason is refused', /why|reason/i.test(await toast()));
   for (const [st, extra] of [['APPROVED'], ['PICKUP_SCHEDULED', async () => { await page.fill('#pkDate', '2026-10-06'); await page.fill('#pkCourier', 'Delhivery RET9'); }], ['PICKED_UP'], ['RECEIVED'], ['INSPECTION'], ['REFUND_PENDING', async () => { await page.selectOption('#inRestock', '1'); }]]) {
     await page.waitForSelector('#rNext'); await page.selectOption('#rNext', st); if (extra) await extra(); await page.click('#rGo'); await page.waitForTimeout(900); }
@@ -91,15 +93,21 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|api\.qrserver\.com/;
   await go('integrations.html'); await page.fill('[data-p=shiprocket] [data-secret=email]', 'ops@shop.test'); await page.fill('[data-p=shiprocket] [data-secret=password]', 'SuperSecret-9876'); await page.fill('[data-p=shiprocket] [data-config=pickupLocation]', 'Primary'); await page.click('[data-p=shiprocket] [data-save]'); await toast(); await page.waitForTimeout(600);
   const ig = (await api('/admin/integrations', {}, owner)).body.providers.find((p) => p.id === 'shiprocket').saved; ok('integration saved; the secret is never returned, only a masked hint', ig.hasSecrets && /••••9876/.test(JSON.stringify(ig.secretHints)) && !JSON.stringify(ig).includes('SuperSecret'));
   ok('webhook URL for the courier is shown', /webhooks\/courier\/shiprocket\?token=/.test(await page.locator('[data-p=shiprocket] input[readonly]').inputValue())); await page.screenshot({ path: SHOTS + '/29-admin-integrations.png', fullPage: true });
+  await go('integrations.html'); ok('integrations: Brevo and ZeptoMail (free email OTP) cards are offered', await page.locator('[data-p=brevo]').count() === 1 && await page.locator('[data-p=zeptomail]').count() === 1 && /300 emails a day/.test(await page.locator('[data-p=brevo]').textContent()) && /10,000/.test(await page.locator('[data-p=zeptomail]').textContent()));
+  await page.fill('[data-p=brevo] [data-secret=apiKey]', 'xkeysib-UI-SECRET-4321'); await page.fill('[data-p=brevo] [data-config=senderEmail]', 'care@thecraftlab.co.in'); await page.fill('[data-p=brevo] [data-config=senderName]', 'The Craft Lab'); await page.click('[data-p=brevo] [data-save]'); await toast(); await page.waitForTimeout(600);
+  const bv = (await api('/admin/integrations', {}, owner)).body.providers.find((p) => p.id === 'brevo').saved; ok('Brevo saved via the admin; key stored encrypted and only a masked hint is returned', bv.hasSecrets && /••••4321/.test(JSON.stringify(bv.secretHints)) && !JSON.stringify(bv).includes('xkeysib-UI'));
+  await go('settings.html'); ok('settings offers the email providers (Brevo, ZeptoMail) alongside SMS ones', (await page.locator('[name=otpProvider] option').allTextContents()).join('|').includes('Brevo') && (await page.locator('[name=otpProvider] option').allTextContents()).join('|').includes('ZeptoMail'));
+  await page.selectOption('[name=otpProvider]', 'brevo'); await page.click('#saveBtn'); await toast(); await page.waitForTimeout(600); ok('choosing Brevo in Settings switches the store to email codes', (await api('/config/public')).body.auth.otpChannel === 'email');
+  await page.selectOption('[name=otpProvider]', 'dev'); await page.selectOption('[name=otpChannel]', 'sms'); await page.click('#saveBtn'); await toast();
   await go('settings.html'); ok('settings: auth switches reflect saved values', await page.locator('[name=guestCheckoutEnabled]').isChecked() && await page.locator('[name=customerLoginEnabled]').isChecked());
   await page.locator('[name=guestCheckoutEnabled]').evaluate((e) => e.click()); await page.click('#saveBtn'); await toast(); await page.waitForTimeout(500); ok('turning guest checkout off in the UI is enforced by the server', (await api('/config/public')).body.auth.guestCheckoutEnabled === false);
   await page.locator('[name=guestCheckoutEnabled]').evaluate((e) => e.click()); await page.click('#saveBtn'); await toast(); await page.screenshot({ path: SHOTS + '/30-admin-settings.png', fullPage: true });
   await page.fill('#pwCur', 'wrong-password-1'); await page.fill('#pwNew', 'A-brand-new-passphrase-9'); await page.fill('#pwNew2', 'A-brand-new-passphrase-9'); await page.click('#pwForm button'); await page.waitForTimeout(700);
   ok('change password: a wrong current password is refused with a clear message', /current password is incorrect/.test(await page.locator('#pwMsg').textContent()));
   await page.fill('#pwCur', 'Passw0rd!x'); await page.fill('#pwNew', 'short'); await page.fill('#pwNew2', 'short'); await page.click('#pwForm button'); await page.waitForTimeout(600); ok('a weak new password is refused', /12 characters/.test(await page.locator('#pwMsg').textContent()));
-  await page.fill('#pwNew', 'A-brand-new-passphrase-9'); await page.fill('#pwNew2', 'A-brand-new-passphrase-9'); await page.fill('#pwCur', 'Passw0rd!x'); await page.click('#pwForm button'); await page.waitForTimeout(900);
+  await page.fill('#pwNew', 'A-brand-new-passphrase-9'); await page.fill('#pwNew2', 'A-brand-new-passphrase-9'); await page.fill('#pwCur', 'Passw0rd!x'); await page.click('#pwForm button'); await page.waitForFunction(() => /Password changed|incorrect|characters/.test(document.getElementById('pwMsg').textContent), null, { timeout: 8000 });
   ok('password changed from the admin screen; the new one logs in and the old one does not', /Password changed/.test(await page.locator('#pwMsg').textContent()) && (await api('/auth/login', { method: 'POST', body: { email: 'owner@shop.test', password: 'A-brand-new-passphrase-9' } })).status === 200 && (await api('/auth/login', { method: 'POST', body: { email: 'owner@shop.test', password: 'Passw0rd!x' } })).status === 401);
-  await go('customers.html'); ok('customers: paginated list with verified badge', /verified/.test(await page.locator('#tableBody').textContent()));
+  await go('customers.html'); ok('customers: paginated list with verified badges', /✓ (mobile|email)/.test(await page.locator('#tableBody').textContent()));
 
   /* ---- phone layout for every admin page ---- */
   const m = await browser.newContext({ viewport: { width: 390, height: 844 } }); await m.route(BLOCK, (r) => r.abort()); const mp = await m.newPage(); await mp.goto(`${B}/admin/login.html`); await mp.evaluate((t) => localStorage.setItem('cl_admin_token', t), owner);

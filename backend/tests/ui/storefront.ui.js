@@ -54,7 +54,7 @@ const FAKE_RZP = `window.Razorpay = class { constructor(o){ this.o = o; } on(){}
   await page.screenshot({ path: SHOTS + '/02-checkout-manual.png' });
   await Promise.all([page.waitForURL(/order-success/), page.click('[data-co="pay"]')]);
   o = await lastOrder(); ok('order saved with the manual delivery method + fee', o.delivery.type === 'manual' && o.total === 2539, `${o.delivery.method} ₹${o.total}`);
-  ok('success page shows the order number', /CL-\d+/.test(await page.locator('#orderDetails').textContent()));
+  ok('success page shows the order number', /FY\d{4}CL\d+/.test(await page.locator('#orderDetails').textContent()));
   await ctx.close();
 
   /* ============ 3. online payment (Razorpay faked in the browser) ============ */
@@ -73,8 +73,8 @@ const FAKE_RZP = `window.Razorpay = class { constructor(o){ this.o = o; } on(){}
   ok('mobile verification required → checkout shows ONLY the login step (no form to fill)', await page.locator('#coName').count() === 0 && /Verify your mobile number/.test(await page.locator('#clCoModal').textContent()));
   await page.screenshot({ path: SHOTS + '/03-checkout-login-gate.png' });
   await page.click('[data-co="otp"]'); await page.waitForSelector('#clOtpModal', { state: 'visible' });
-  await page.fill('#clOtpPhoneInput', '98765'); await page.click('#clOtpSendBtn'); ok('a short number is rejected', /valid 10-digit/.test(await page.locator('#clOtpPhoneError').textContent()));
-  await page.fill('#clOtpPhoneInput', '9988776655'); await page.click('#clOtpSendBtn'); await page.waitForSelector('#clOtpStepCode', { state: 'visible' });
+  await page.fill('#clOtpPhoneInput', '98765'); await page.check('#clOtpTerms'); await page.click('#clOtpSendBtn'); ok('a short number is rejected', /valid 10-digit/.test(await page.locator('#clOtpPhoneError').textContent()));
+  await page.fill('#clOtpPhoneInput', '9988776655'); await page.check('#clOtpTerms'); await page.click('#clOtpSendBtn'); await page.waitForSelector('#clOtpStepCode', { state: 'visible' });
   const hint = await page.locator('#clOtpDevHint').textContent(); const code = (hint.match(/\d{6}/) || [])[0]; ok('test mode shows the code on screen (never in production)', !!code, hint);
   ok('resend is on a cooldown', /Resend code in \d+s/.test(await page.locator('#clOtpResendBtn').textContent()));
   await page.screenshot({ path: SHOTS + '/04-otp-modal.png' });
@@ -94,6 +94,24 @@ const FAKE_RZP = `window.Razorpay = class { constructor(o){ this.o = o; } on(){}
   ({ ctx, page } = await newPage()); await addToCart(page, 'sculptural-wall-hook-rack'); await openCheckout(page);
   ok('OTP switched off → no OTP button; guest form is shown', await page.locator('[data-co="otp"]').count() === 0 && await page.locator('#coName').count() === 1); await ctx.close();
   await setSettings({ otpEnabled: true });
+
+  /* ============ 5. EMAIL OTP (free) ============ */
+  await setSettings({ otpProvider: 'dev', otpChannel: 'email', requireMobileVerification: true }); await fetch(B + '/__reset-otp');
+  ({ ctx, page } = await newPage()); await addToCart(page, 'sculptural-wall-hook-rack'); await openCheckout(page);
+  ok('email OTP: checkout asks the customer to verify their EMAIL (no form to fill yet)', await page.locator('#coName').count() === 0 && /Verify your email/.test(await page.locator('#clCoModal').textContent()) && /email code/.test(await page.locator('[data-co="otp"]').textContent()));
+  await page.screenshot({ path: SHOTS + '/05-email-gate.png' });
+  await page.click('[data-co="otp"]'); await page.waitForSelector('#clOtpModal', { state: 'visible' });
+  ok('the modal asks for an email address (no +91 prefix)', (await page.locator('#clOtpPhoneInput').getAttribute('type')) === 'email' && !(await page.locator('#clOtpPrefix').isVisible()) && /Log in with your email/.test(await page.locator('#clOtpTitle').textContent()));
+  await page.fill('#clOtpPhoneInput', 'not-an-email'); await page.check('#clOtpTerms'); await page.click('#clOtpSendBtn'); ok('an invalid email is rejected before anything is sent', /valid email/.test(await page.locator('#clOtpPhoneError').textContent()));
+  await page.fill('#clOtpPhoneInput', 'Buyer.UI@Example.com'); await page.check('#clOtpTerms'); await page.click('#clOtpSendBtn'); await page.waitForSelector('#clOtpStepCode', { state: 'visible' });
+  ok('the code step says it was emailed', /Code sent to Buyer\.UI@Example\.com.*inbox/.test(await page.locator('#clOtpSentTo').textContent()));
+  await page.screenshot({ path: SHOTS + '/06-email-otp-modal.png' });
+  const ecode = ((await page.locator('#clOtpDevHint').textContent()).match(/\d{6}/) || [])[0]; await page.fill('#clOtpCodeInput', ecode); await page.waitForSelector('#coName', { timeout: 8000 });
+  ok('after the code, the checkout opens with the verified email locked in', (await page.inputValue('#coEmail')) === 'buyer.ui@example.com' && await page.locator('#coEmail').getAttribute('readonly') !== null && await page.locator('#coPhone').getAttribute('readonly') === null);
+  await page.fill('#coName', 'Email Buyer'); await page.fill('#coPhone', '9123456780'); await page.fill('#coPin', '603110'); await page.fill('#coCity', 'Chennai'); await page.fill('#coState', 'Tamil Nadu'); await page.fill('#coLine1', '9 Email Street'); await page.waitForTimeout(700); await page.check('input[name=pm][value=cod]'); await page.waitForTimeout(500);
+  await Promise.all([page.waitForURL(/order-success/), page.click('[data-co="pay"]')]); o = await lastOrder();
+  const ecust = (await api('/admin/customers?q=buyer.ui', {}, owner)).body.customers[0]; ok('order placed; the account is email-verified and has no unverified phone claim', o.customer.email === 'buyer.ui@example.com' && ecust && ecust.emailVerified === true && !ecust.phoneVerified, `${o.orderNumber}`);
+  await ctx.close(); await setSettings({ requireMobileVerification: false, otpProvider: 'dev', otpChannel: 'sms' });
 
   console.log('\nJS errors:', errs.length ? errs.join(' | ') : 'none'); console.log(`${pass}/${pass + fail} passed`);
   await browser.close(); process.exit(fail ? 1 : 0);

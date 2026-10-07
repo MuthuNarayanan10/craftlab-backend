@@ -106,3 +106,11 @@ test('integration secrets are encrypted at rest and never exposed to the browser
   i.setSecrets({ password: 'N3w-Pass-9999' }); assert.equal(i.getSecrets().password, 'N3w-Pass-9999');
   delete process.env.SECRETS_KEY; assert.throws(() => new Integration({ provider: 'x', kind: 'courier' }).setSecrets({ a: 'b' }), /SECRETS_KEY/);
 });
+
+test('single-container hosting: config.js is rewritten to the same-origin API and picks up Firebase/WhatsApp from the environment', () => {
+  const { renderConfig } = require('../src/frontendHost');
+  const src = "const API_BASE = (location.hostname === 'localhost')\n  ? 'http://localhost:4000/api'\n  : 'https://x.onrender.com/api';\nconst WHATSAPP_NUMBER = '91XXXXXXXXXX';\nconst FIREBASE_CONFIG = {\n  apiKey: 'YOUR',\n  projectId: 'p',\n};\nconst KEEP = 1;";
+  const out = renderConfig(src, { FIREBASE_API_KEY: 'AIza-test', FIREBASE_PROJECT_ID: 'craft', FIREBASE_AUTH_DOMAIN: 'craft.firebaseapp.com', WHATSAPP_NUMBER: '+91 80468 00250' });
+  assert.match(out, /const API_BASE = location\.origin \+ '\/api';/); assert.ok(!out.includes('onrender')); assert.ok(out.includes('"apiKey":"AIza-test"')); assert.ok(out.includes('"authDomain":"craft.firebaseapp.com"')); assert.ok(out.includes("WHATSAPP_NUMBER = \"918046800250\"")); assert.ok(out.includes('const KEEP = 1;'), 'nothing else is touched');
+  const plain = renderConfig(src, {}); assert.ok(plain.includes("apiKey: 'YOUR'"), 'without env values the Firebase block is left alone');
+});

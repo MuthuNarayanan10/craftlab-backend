@@ -37,7 +37,8 @@ const { LEGACY } = (() => { const r = require('../src/utils/returnStatus'); retu
   }
   console.log(`✅ order timelines rebuilt: ${rebuilt}`);
 
-  await Promise.all([Order.syncIndexes(), Return.syncIndexes()]);
+  // Index sync is an optimisation, never a reason to refuse to start: warn and carry on.
+  for (const [name, model] of [['orders', Order], ['returns', Return]]) { try { await model.syncIndexes(); } catch (e) { console.warn(`⚠️  could not sync ${name} indexes (${String(e.message).slice(0, 120)}) — continuing`); } }
   console.log('✅ indexes in sync');
   await mongoose.disconnect();
 })().catch((e) => { console.error(e); process.exit(1); });

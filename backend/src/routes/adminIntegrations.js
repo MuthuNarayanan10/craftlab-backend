@@ -5,7 +5,7 @@ const Integration = require('../models/Integration');
 const { getSettings } = require('../models/Settings');
 const { requireRole } = require('../middleware/adminAuth');
 const { listCouriers, getCourier } = require('../utils/courier');
-const { devSender, msg91Sender } = require('../utils/otp/senders');
+const { devSender, msg91Sender, brevoSender, zeptomailSender } = require('../utils/otp/senders');
 const { isConfigured } = require('../utils/crypto');
 const { resetNotifierCache } = require('../services/notifier');
 const { audit } = require('../models/AuditLog');
@@ -14,6 +14,8 @@ const { audit } = require('../models/AuditLog');
 const CATALOG = {
   shiprocket: { kind: 'courier', label: 'Shiprocket', secrets: ['email', 'password'], config: ['pickupLocation', 'defaultWeightKg', 'defaultLengthCm', 'defaultBreadthCm', 'defaultHeightCm'], help: 'Use an API user created in Shiprocket (Settings → API). “Pickup location” must match the pickup nickname in your Shiprocket account.' },
   msg91: { kind: 'otp', label: 'MSG91 (SMS OTP)', secrets: ['authKey'], config: ['templateId'], help: 'Needs a DLT-approved OTP template in MSG91 (mandatory for SMS in India).' },
+  brevo: { kind: 'otp', label: 'Brevo (email OTP — free: 300 emails/day)', secrets: ['apiKey'], config: ['senderEmail', 'senderName'], help: 'Create a free Brevo account, verify your sender email/domain (Senders & IP), and create an API key (SMTP & API → API Keys). Then choose “Brevo” as the OTP provider in Settings.' },
+  zeptomail: { kind: 'otp', label: 'Zoho ZeptoMail (email OTP — first 10,000 emails free)', secrets: ['sendMailToken'], config: ['senderEmail', 'senderName', 'region'], help: 'Create a Mail Agent in ZeptoMail, verify your sending domain, copy its “Send Mail token”. Region = in, com or eu — the data centre where your ZeptoMail account lives. Then choose “Zoho ZeptoMail” as the OTP provider in Settings.' },
   whatsapp_cloud: { kind: 'whatsapp', label: 'WhatsApp Business Cloud API', secrets: ['accessToken'], config: ['phoneNumberId', 'templateName', 'languageCode'], help: 'Needs a Meta Business account, a verified WhatsApp number and an approved message template with 3 variables ({{1}} name, {{2}} order number, {{3}} message).' },
 };
 
@@ -63,6 +65,13 @@ router.post('/:provider/test', requireRole('ADMIN'), async (req, res) => {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(j.error?.message || `WhatsApp API returned ${r.status}`);
       result = { ok: true, message: `Connected to ${j.verified_name || 'WhatsApp'} (${j.display_phone_number || ''})` };
+    } else if (doc.provider === 'brevo' || doc.provider === 'zeptomail') {
+      const to = String(req.body.email || '').trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(to)) return res.status(400).json({ error: 'Enter an email address to send ONE test code to' });
+      const c = doc.config || {};
+      const sender = doc.provider === 'brevo' ? brevoSender({ apiKey: s.apiKey, senderEmail: c.senderEmail, senderName: c.senderName, baseUrl: process.env.BREVO_BASE_URL || undefined }) : zeptomailSender({ sendMailToken: s.sendMailToken, senderEmail: c.senderEmail, senderName: c.senderName, region: c.region || 'in', baseUrl: process.env.ZEPTOMAIL_BASE_URL || undefined });
+      await sender.send(to, String(Math.floor(100000 + Math.random() * 900000)));
+      result = { ok: true, message: `Test code emailed to ${to}` };
     } else if (doc.provider === 'msg91') {
       if (!req.body.phone) return res.status(400).json({ error: 'Enter a mobile number to send a test OTP to (this sends one real SMS)' });
       const phone = '+91' + String(req.body.phone).replace(/\D/g, '').slice(-10);

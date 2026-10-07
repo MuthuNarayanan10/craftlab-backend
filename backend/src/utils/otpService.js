@@ -16,14 +16,22 @@ function normalizePhone(input) {
   return /^[6-9]\d{9}$/.test(d) ? '+91' + d : null;
 }
 
-function createOtpService({ store, sender, hmacSecret, now = () => Date.now(), config = {}, isProduction = process.env.NODE_ENV === 'production' }) {
+/** Lower-cases and validates an email address. */
+function normalizeEmail(input) {
+  const e = String(input || '').trim().toLowerCase();
+  return e.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e) ? e : null;
+}
+
+function createOtpService({ store, sender, hmacSecret, channel = 'phone', now = () => Date.now(), config = {}, isProduction = process.env.NODE_ENV === 'production' }) {
   if (!hmacSecret) throw new Error('OTP service needs an HMAC secret');
   const cfg = { ttlMs: 5 * 60e3, resendCooldownMs: 30e3, maxSendsPerPhoneHour: 5, maxSendsPerIpHour: 20, maxAttempts: 5, length: 6, ...config };
+  const norm = channel === 'email' ? normalizeEmail : normalizePhone;
+  const what = channel === 'email' ? 'email address' : 'mobile number';
   const hash = (phone, code) => crypto.createHmac('sha256', hmacSecret).update(`${phone}:${code}`).digest('hex');
 
   async function send(rawPhone, ip) {
-    const phone = normalizePhone(rawPhone);
-    if (!phone) throw new OtpError('INVALID_PHONE', 'Please enter a valid 10-digit mobile number');
+    const phone = norm(rawPhone);
+    if (!phone) throw new OtpError(channel === 'email' ? 'INVALID_EMAIL' : 'INVALID_PHONE', channel === 'email' ? 'Please enter a valid email address' : 'Please enter a valid 10-digit mobile number');
     const t = now();
 
     const latest = await store.latest(phone);
@@ -32,7 +40,7 @@ function createOtpService({ store, sender, hmacSecret, now = () => Date.now(), c
       throw new OtpError('COOLDOWN', `Please wait ${retryAfterSec}s before requesting another code`, 429, { retryAfterSec });
     }
     const since = new Date(t - 3600e3);
-    if ((await store.countRecent({ phone, since })) >= cfg.maxSendsPerPhoneHour) throw new OtpError('TOO_MANY_PHONE', 'Too many codes requested for this number. Please try again in an hour.', 429);
+    if ((await store.countRecent({ phone, since })) >= cfg.maxSendsPerPhoneHour) throw new OtpError('TOO_MANY_PHONE', `Too many codes requested for this ${what}. Please try again in an hour.`, 429);
     if (ip && (await store.countRecent({ ip, since })) >= cfg.maxSendsPerIpHour) throw new OtpError('TOO_MANY_IP', 'Too many requests from this network. Please try again later.', 429);
 
     const code = String(crypto.randomInt(0, 10 ** cfg.length)).padStart(cfg.length, '0');
@@ -41,11 +49,11 @@ function createOtpService({ store, sender, hmacSecret, now = () => Date.now(), c
     try { await sender.send(phone, code); }
     catch (e) { await store.consume(rec.id); throw new OtpError('SEND_FAILED', 'We couldn’t send the OTP right now. Please try again shortly.', 502, { cause: e.message }); }
 
-    return { phone, expiresInSec: Math.round(cfg.ttlMs / 1000), resendAfterSec: Math.round(cfg.resendCooldownMs / 1000), devCode: sender.id === 'dev' && !isProduction ? code : undefined };
+    return { phone, identifier: phone, expiresInSec: Math.round(cfg.ttlMs / 1000), resendAfterSec: Math.round(cfg.resendCooldownMs / 1000), devCode: sender.id === 'dev' && !isProduction ? code : undefined };
   }
 
   async function verify(rawPhone, rawCode) {
-    const phone = normalizePhone(rawPhone);
+    const phone = norm(rawPhone);
     const code = String(rawCode || '').trim();
     if (!phone || !/^\d{4,8}$/.test(code)) throw new OtpError('INVALID_INPUT', 'Enter the code we sent you');
     const rec = await store.latestActive(phone);
@@ -62,7 +70,7 @@ function createOtpService({ store, sender, hmacSecret, now = () => Date.now(), c
     await store.consume(rec.id);
     return { phone };
   }
-  return { send, verify, normalizePhone, config: cfg };
+  return { send, verify, normalizePhone, normalizeEmail, config: cfg };
 }
 
-module.exports = { createOtpService, normalizePhone, OtpError };
+module.exports = { createOtpService, normalizePhone, normalizeEmail, OtpError };

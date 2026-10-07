@@ -13,6 +13,8 @@ const productSchema = new mongoose.Schema({
 
   category: { type: String, default: 'Home Decor' },
   tags: [{ type: String }],
+  collections: [{ type: String }],        // which homepage carousels this product appears in (admin-controlled): featured | new-arrivals | best-sellers | recommended
+  collectionRank: { type: Number, default: 100 }, // lower = earlier in a carousel
 
   material: { type: String, default: '' },
   dimensions: { type: String, default: '' },      // e.g. "50cm (L) x 22cm (H)"

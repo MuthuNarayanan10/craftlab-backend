@@ -28,7 +28,7 @@ router.post('/login', async (req, res) => {
     await audit({ action: 'admin.login_failed', actor: email, entity: 'admin', summary: `Failed admin login for ${email}`, req });
     return res.status(401).json({ error: 'Invalid credentials' });
   }
-  admin.failedLogins = 0; admin.lockUntil = null; await admin.save();
+  admin.failedLogins = 0; admin.lockUntil = null; admin.lastLoginAt = new Date(); await admin.save();
   const token = jwt.sign({ sub: admin.id, role: admin.role, type: 'admin' }, process.env.JWT_SECRET, { expiresIn: '12h' });
   await audit({ action: 'admin.login', actor: admin.email, entity: 'admin', entityId: admin.id, summary: `${admin.email} logged in`, req });
   res.json({ token, admin });

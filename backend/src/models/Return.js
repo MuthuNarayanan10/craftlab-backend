@@ -21,6 +21,7 @@ const returnSchema = new mongoose.Schema({
   status: { type: String, enum: [...STATUSES, 'Requested', 'Approved', 'Rejected', 'PickedUp', 'Refunded'], default: 'REQUESTED' },
   pickup: { scheduledAt: { type: Date, default: null }, courier: { type: String, default: '' }, awb: { type: String, default: '' }, selfShip: { type: Boolean, default: false } },
   inspection: { result: { type: String, enum: ['', 'passed', 'partial', 'failed'], default: '' }, notes: { type: String, default: '' }, restock: { type: Boolean, default: false }, restocked: { type: Boolean, default: false } },
+  walletRefund: { type: Number, default: 0 },   // ₹ of this refund that went back to the rewards wallet / gift cards
   refund: { amount: { type: Number, default: 0 }, refundId: { type: String, default: '' }, status: { type: String, default: '' }, issuedAt: { type: Date, default: null } },
   rejectionReason: { type: String, default: '' },
   adminNotes: { type: String, default: '' },

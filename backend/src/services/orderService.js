@@ -4,6 +4,7 @@ const Order = require('../models/Order');
 const Cart = require('../models/Cart');
 const { getSettings } = require('../models/Settings');
 const { getNextSequence } = require('../models/Counter');
+const rewards = require('./rewards');
 const { createNotification } = require('../models/Notification');
 const { adjustStock } = require('./inventory');
 const { notifyOrder } = require('./notifier');
@@ -71,6 +72,7 @@ async function confirmPayment(orderId, { paymentId, signature = '', method = '',
   pushEvent(order, { label: 'Invoice generated', actor: 'system', public: false, type: 'invoice', note: order.invoiceNumber });
   await order.save();
 
+  await rewards.recordEarn(order).catch(() => {});
   if (order.cartId) await Cart.findOneAndUpdate({ cartId: order.cartId }, { status: 'converted', convertedToOrder: order._id });
   await createNotification('new_order', `New order ${order.orderNumber} — ₹${order.total}`, { orderNumber: order.orderNumber });
   await audit({ action: 'order.paid', actor, entity: 'order', entityId: order.id, summary: `Order ${order.orderNumber} paid — ₹${order.total} (${via})` });
@@ -90,6 +92,7 @@ async function finalizeCodOrder(order) {
   pushEvent(order, { label: 'Inventory updated', actor: 'system', public: false, type: 'inventory' });
   await ensureInvoice(order, settings);
   await order.save();
+  await rewards.recordEarn(order).catch(() => {});
   await Cart.findOneAndUpdate({ cartId: order.cartId }, { status: 'converted', convertedToOrder: order._id });
   await createNotification('new_order', `New COD order ${order.orderNumber} — ₹${order.total}`, { orderNumber: order.orderNumber });
   await audit({ action: 'order.cod_placed', actor: 'customer', entity: 'order', entityId: order.id, summary: `COD order ${order.orderNumber} — ₹${order.total}` });
@@ -106,7 +109,8 @@ async function afterStatusChange(order, from, to, actor) {
       if (deducted) await adjustStock(it.product, it.qty, { reason: 'order_cancelled', ref: order.orderNumber, actor });
       else await require('../models/Product').findByIdAndUpdate(it.product, { $inc: { reserved: -it.qty } });
     }
-    if (order.paymentStatus === 'Paid' && !isCod(order) && !(order.refundedAmount >= order.total)) {
+    await rewards.onCancelled(order).catch((e) => logger.error('rewards_cancel_failed', { error: e.message })); // points + gift-card money back, earned points withdrawn
+    if (order.paymentStatus === 'Paid' && !isCod(order) && order.total > 0 && !(order.refundedAmount >= order.total)) {
       pushEvent(order, { label: 'Refund due — payment was received before cancellation', actor: 'system', public: false, type: 'refund_due' });
       await createNotification('payment_failed', `Order ${order.orderNumber} was cancelled after payment — issue a refund (₹${order.total})`, { orderNumber: order.orderNumber });
     }

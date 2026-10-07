@@ -1,6 +1,7 @@
 const Product = require('../models/Product');
 const Coupon = require('../models/Coupon');
 const { pushEvent } = require('../utils/orderEvents');
+const rewards = require('./rewards');
 
 /** Gives back everything an unpaid checkout was holding (reserved stock, coupon use) and cancels the order. Idempotent. */
 async function releaseHold(order, reason = 'Checkout not completed', actor = 'system') {
@@ -10,6 +11,7 @@ async function releaseHold(order, reason = 'Checkout not completed', actor = 'sy
   order.orderStatus = 'Cancelled';
   pushEvent(order, { label: 'Order cancelled', actor, note: reason, type: 'status', public: true });
   await order.save();
+  await rewards.onCancelled(order).catch(() => {}); // points and gift-card balance used on this checkout come back
   return true;
 }
 module.exports = { releaseHold };

@@ -29,8 +29,8 @@ router.put('/:id', async (req, res) => {
     const target = parseInt(req.body.stock, 10);
     const fresh = await Product.findById(product.id);
     if (Number.isInteger(target) && target >= 0 && target !== fresh.stock) {
-      try { await adjustStock(product.id, target - fresh.stock, { reason: 'manual_adjustment', actor: req.admin.email, note: 'Edited in Products' }); }
-      catch (e) { return res.status(409).json({ error: 'Stock changed while you were editing — refresh and try again' }); }
+      try { await adjustStock(product.id, target - fresh.stock, { reason: 'manual_adjustment', actor: req.admin.email, note: 'Edited in Products', respectReserved: true }); }
+      catch (e) { return res.status(409).json({ error: /held for customers/.test(e.message) ? e.message : 'Stock changed while you were editing — refresh and try again' }); }
     }
   }
   const after = { price: product.price, mrp: product.mrp, status: product.status };

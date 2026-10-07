@@ -39,7 +39,7 @@ const KEY_SECRET = 'ui_key_secret';
   await j('/admin/delivery/express', { method: 'PUT', headers: A, body: { enabled: true } });
   await j('/admin/delivery/manual', { method: 'PUT', headers: A, body: { enabled: true, fee: 40, pincodePrefixes: '600', etaMaxDays: 1 } });
   // a customer account (verified by OTP) so the account pages have data
-  const otp = await j('/customers/otp/send', { method: 'POST', body: { phone: '9876543210' } }); const login = await j('/customers/otp/verify', { method: 'POST', body: { phone: '9876543210', code: otp.body.devCode, name: 'Muthu' } });
+  const otp = await j('/customers/otp/send', { method: 'POST', body: { phone: '9876543210' } }); const login = await j('/customers/otp/verify', { method: 'POST', body: { phone: '9876543210', code: otp.body.devCode, name: 'Muthu', termsAccepted: true } });
   const C = { Authorization: 'Bearer ' + login.body.token };
   await j('/customers/me', { method: 'PUT', headers: C, body: { email: 'muthu@example.com', addresses: [{ label: 'Home', receiverName: 'Muthu', line1: '136 Sree Devi Street', line2: 'Sree Ranga Nagar', city: 'Chengalpattu', state: 'Tamil Nadu', pincode: '603110' }] } });
   const order = async (product, qty, extra = {}, auth = C) => { const cart = (await j('/cart', { method: 'POST' })).body.cartId; await j(`/cart/${cart}/items`, { method: 'POST', body: { productId: product.id, qty } }); const r = await j('/checkout', { method: 'POST', headers: auth, body: { cartId: cart, paymentMethod: 'cod', deliveryMethod: 'standard', customer: { name: 'Muthu', phone: '9876543210', email: 'muthu@example.com' }, address: { line1: '136 Sree Devi Street', city: 'Chengalpattu', state: 'Tamil Nadu', pincode: '603110' }, ...extra } }); return r.body; };

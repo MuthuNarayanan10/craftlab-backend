@@ -37,7 +37,7 @@ router.post('/adjust', async (req, res) => {
   const reason = String(req.body.reason || '').trim();
   if (!reason) return res.status(400).json({ error: 'Choose a reason — every stock change is recorded' });
   try {
-    const p = await adjustStock(req.body.productId, delta, { reason: 'manual_adjustment', note: reason + (req.body.note ? ` — ${String(req.body.note).slice(0, 150)}` : ''), actor: req.admin.email });
+    const p = await adjustStock(req.body.productId, delta, { reason: 'manual_adjustment', note: reason + (req.body.note ? ` — ${String(req.body.note).slice(0, 150)}` : ''), actor: req.admin.email, respectReserved: true });
     await audit({ action: 'inventory.adjusted', actor: req.admin.email, entity: 'product', entityId: p.id, summary: `${p.name}: ${delta > 0 ? '+' : ''}${delta} (${reason}) → ${p.stock} in stock`, after: { stock: p.stock }, req });
     res.json({ id: p.id, stock: p.stock });
   } catch (e) { res.status(409).json({ error: e.message === 'Not enough stock for that change' ? 'You can’t remove more units than are in stock' : e.message }); }

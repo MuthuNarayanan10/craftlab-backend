@@ -20,6 +20,11 @@ const customerSchema = new mongoose.Schema({
   phone: { type: String, unique: true, sparse: true, trim: true }, // E.164, e.g. +919876543210
   firebaseUid: { type: String, unique: true, sparse: true },
   phoneVerified: { type: Boolean, default: false },
+  termsAcceptedAt: { type: Date, default: null },
+  rewardPoints: { type: Number, default: 0 },   // spendable points (1 point = ₹1) — changed only by atomic updates in services/rewards.js
+  rewardPending: { type: Number, default: 0 },  // earned, waiting for the return window to end
+  wishlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
+  emailVerified: { type: Boolean, default: false },
   lastLoginAt: { type: Date, default: null },
   authMethod: { type: String, enum: ['password', 'otp'], default: 'password' },
   passwordHash: { type: String, default: '' },

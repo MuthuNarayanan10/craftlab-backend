@@ -2,6 +2,8 @@
  *  Set DISABLE_JOBS=true to turn them off (e.g. on a second instance). */
 const { reconcilePending } = require('./services/reconcile');
 const { releaseStaleHolds } = require('./services/maintenance');
+const { expireReservations } = require('./services/reservations');
+const rewards = require('./services/rewards');
 const { syncAll } = require('./services/shipmentService');
 const { retryFailedNotifications } = require('./services/notifier');
 const Integration = require('./models/Integration');
@@ -15,13 +17,17 @@ function every(ms, name, fn, first = 60e3) {
 
 function startJobs() {
   if (process.env.DISABLE_JOBS === 'true') { logger.info('jobs_disabled', {}); return; }
-  // 1) recover payments whose webhook/callback was missed, THEN free holds on checkouts that never completed
-  every(10 * 60e3, 'payments_reconcile', async () => {
+  // 1) every 2 minutes: recover payments whose webhook/callback was missed, THEN free stock held by checkouts that ran out of time
+  every(2 * 60e3, 'stock_holds', async () => {
     const hasRazorpay = process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET;
-    const rec = hasRazorpay ? await reconcilePending({ olderThanMin: 5 }) : {};
-    const released = await releaseStaleHolds(30);
-    return { ...rec, released };
-  });
+    const rec = hasRazorpay ? await reconcilePending({ olderThanMin: 3 }) : {};
+    const released = await releaseStaleHolds();
+    const expired = await expireReservations();
+    return { ...rec, released, expired };
+  }, 30e3);
+  // 1b) every 30 minutes: points earned on delivered orders become spendable once the return window has passed
+  every(30 * 60e3, 'rewards_credit', async () => ({ credited: await rewards.creditPending() }), 60e3);
+
   // 2) pull courier tracking for shipments in flight (if a courier API is enabled)
   every(20 * 60e3, 'courier_sync', async () => (await Integration.countDocuments({ kind: 'courier', enabled: true })) ? syncAll(50) : null, 120e3);
   // 3) retry notifications that failed

@@ -47,8 +47,8 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|gstatic\.com\/firebasejs|api\.qr
   ({ ctx, page } = await newPage());
   await page.goto(`${B}/account.html`); await page.waitForSelector('#otpLoginBtn'); await page.screenshot({ path: SHOTS + '/13-account-login.png' });
   ok('logged-out page offers OTP first, then email login + sign-up', await page.locator('#loginForm').count() === 1 && await page.locator('#signupForm').count() === 1);
-  await page.click('#otpLoginBtn'); await page.fill('#clOtpPhoneInput', '9876543210'); await page.click('#clOtpSendBtn'); await page.waitForSelector('#clOtpStepCode', { state: 'visible' });
-  const code = ((await page.locator('#clOtpDevHint').textContent()).match(/\d{6}/) || [])[0]; await page.fill('#clOtpCodeInput', code); await page.waitForSelector('.order-card', { timeout: 8000 });
+  await page.click('#otpLoginBtn'); await page.fill('#clOtpPhoneInput', '9876543210'); await page.check('#clOtpTerms'); await page.click('#clOtpSendBtn'); await page.waitForSelector('#clOtpStepCode', { state: 'visible' });
+  const code = ((await page.locator('#clOtpDevHint').textContent()).match(/\d{6}/) || [])[0]; await page.fill('#clOtpCodeInput', code); await page.waitForSelector('[data-tab=orders]', { timeout: 8000 }); ok('login lands on My Details with account information', /Account information/.test(await page.locator('#tabBody').textContent()) && /Terms accepted/.test(await page.locator('#tabBody').textContent())); await page.click('[data-tab=orders]'); await page.waitForSelector('.order-card', { timeout: 8000 });
   ok('OTP login recognises the existing customer and shows their orders', await page.locator('.order-card').count() >= 4 && /Hello, Muthu/.test(await page.locator('.page-banner h1').textContent()));
   const card = page.locator('.order-card', { hasText: manualOut.orderNumber });
   ok('order card: mini journey, status pill, delivery method, track button', await card.locator('.mini-j').count() === 1 && /Out for delivery/.test(await card.textContent()) && /Local delivery by our team/.test(await card.textContent()) && await card.locator('a:has-text("Track order")').count() === 1);
@@ -67,14 +67,14 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|gstatic\.com\/firebasejs|api\.qr
   ok('after submitting, the order shows its return journey (Requested)', /Return · Return requested/.test(await after.textContent()) && await after.locator('[data-return]').count() === 0, '₹2,499 for 1 of 2 units');
   const rets = (await api('/admin/returns', {}, owner)).body.returns; const r1 = rets.find((r) => r.orderNumber === delivered.orderNumber); ok('server recorded 1 unit, refundable ₹2,499, photo attached', r1 && r1.items[0].qty === 1 && r1.amount === 2499 && r1.imageCount === 1 && r1.reason === 'Damaged on arrival');
   for (const st of ['APPROVED']) await api(`/admin/returns/${r1.id}/status`, { method: 'PUT', body: { status: st } }, owner);
-  await page.reload(); await page.waitForSelector('.order-card'); ok('journey follows the admin’s decision (Approved)', /Return · Approved/.test(await page.locator('.order-card', { hasText: delivered.orderNumber }).textContent()));
+  await page.reload(); await page.waitForSelector('[data-tab=orders]'); await page.click('[data-tab=orders]'); await page.waitForSelector('.order-card'); ok('journey follows the admin’s decision (Approved)', /Return · Approved/.test(await page.locator('.order-card', { hasText: delivered.orderNumber }).textContent()));
   await page.screenshot({ path: SHOTS + '/16-account-return.png', fullPage: true });
   // other tabs
   await page.click('[data-tab=updates]'); await page.waitForSelector('.tl li'); ok('Updates tab: order timeline events across orders', await page.locator('.tl li').count() > 8);
   await page.click('[data-tab=addresses]'); ok('Addresses tab lists the saved address', /136 Sree Devi Street/.test(await page.locator('#tabBody').textContent()));
   await page.click('#addAddr'); await page.fill('#addrForm [name=pincode]', '600042'); await page.fill('#addrForm [name=city]', 'Chennai'); await page.fill('#addrForm [name=state]', 'Tamil Nadu'); await page.fill('#addrForm [name=line1]', '7 New Road'); await page.click('#addrForm button[type=submit]'); await page.waitForSelector('text=7 New Road');
   ok('address added', (await page.locator('#tabBody .order-card').count()) === 2); await page.click('[data-del]:last-of-type'); await page.waitForTimeout(500); ok('address deleted', (await page.locator('#tabBody .order-card').count()) === 1);
-  await page.click('[data-tab=profile]'); await page.fill('#profForm [name=name]', 'Muthu N'); await page.click('#profForm button'); await page.waitForSelector('#profMsg:not(:empty)'); ok('profile saved; verified phone shown read-only', /Saved/.test(await page.locator('#profMsg').textContent()) && /Verified/.test(await page.locator('#tabBody').textContent()));
+  await page.click('[data-tab=details]'); await page.fill('#profForm [name=name]', 'Muthu N'); await page.click('#profForm button'); await page.waitForSelector('#profMsg:not(:empty)'); ok('profile saved; verified phone shown read-only', /Saved/.test(await page.locator('#profMsg').textContent()) && /Verified/.test(await page.locator('#tabBody').textContent()));
   await ctx.close();
 
   /* ================= admin switches change the account page ================= */
