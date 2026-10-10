@@ -12,6 +12,7 @@ const productSchema = new mongoose.Schema({
   mrp: { type: Number, required: true },          // compare-at price
 
   category: { type: String, default: 'Home Decor' },
+  subcategory: { type: String, default: '' },     // optional — '' means the product sits directly in its category
   tags: [{ type: String }],
   collections: [{ type: String }],        // which homepage carousels this product appears in (admin-controlled): featured | new-arrivals | best-sellers | recommended
   collectionRank: { type: Number, default: 100 }, // lower = earlier in a carousel

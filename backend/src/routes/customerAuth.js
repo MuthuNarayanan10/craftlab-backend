@@ -10,6 +10,7 @@ const { requireCustomer } = require('../middleware/customerAuth');
 const { verifyFirebaseToken } = require('../utils/firebase');
 const { createOtpService, OtpError } = require('../utils/otpService');
 const { devSender, msg91Sender, brevoSender, zeptomailSender } = require('../utils/otp/senders');
+const { brevoFromEnv } = require('../utils/otp/brevoEnv');
 const { channelOf, SERVER_PROVIDERS } = require('../utils/otpChannel');
 const { ownedOrdersFilter } = require('../utils/ownership');
 const otpStore = require('../services/otpStore');
@@ -31,6 +32,7 @@ async function buildOtpService(settings) {
   let sender;
   const notReady = () => new OtpError('NOT_CONFIGURED', 'OTP login is not set up on this store yet', 503);
   if (settings.otpProvider === 'dev') sender = devSender();
+  else if (settings.otpProvider === 'brevo' && brevoFromEnv()) { const e = brevoFromEnv(); sender = brevoSender({ apiKey: e.apiKey, senderEmail: e.senderEmail, senderName: e.senderName || settings.businessName, baseUrl: process.env.BREVO_BASE_URL || undefined }); }
   else if (['msg91', 'brevo', 'zeptomail'].includes(settings.otpProvider)) {
     const i = await Integration.findOne({ provider: settings.otpProvider, enabled: true });
     if (!i) throw notReady();
@@ -79,6 +81,7 @@ router.post('/otp/verify', (req, res, next) => (termsOk(req, res) ? next() : und
       if (customer.status === 'blocked') return res.status(403).json({ error: 'This account has been blocked. Contact care@thecraftlab.co.in.' });
       if (!(s.customerLoginEnabled || s.requireMobileVerification)) return res.status(403).json({ error: 'Customer login is currently disabled' });
       if (email) customer.emailVerified = true; else customer.phoneVerified = true;
+      customer.isGuest = false;
     }
     res.json(await issueSession(customer, { isNewCustomer: isNew }));
   } catch (e) { sendError(res, e); }
@@ -101,7 +104,7 @@ router.post('/otp-login', (req, res, next) => (termsOk(req, res) ? next() : unde
     if (customer.status === 'blocked') return res.status(403).json({ error: 'This account has been blocked.' });
     if (!(s.customerLoginEnabled || s.requireMobileVerification)) return res.status(403).json({ error: 'Customer login is currently disabled' });
     if (!customer.firebaseUid) customer.firebaseUid = decoded.uid;
-    customer.phoneVerified = true;
+    customer.phoneVerified = true; customer.isGuest = false;
   }
   res.json(await issueSession(customer, { isNewCustomer: isNew }));
 });
@@ -111,8 +114,11 @@ router.post('/signup', (req, res, next) => (termsOk(req, res) ? next() : undefin
   const { name, email, phone, password } = req.body;
   if (!name || !email || !password) return res.status(400).json({ error: 'Name, email and password are required' });
   if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  if (await Customer.findOne({ email: String(email).toLowerCase() })) return res.status(409).json({ error: 'An account with this email already exists. Try logging in instead.' });
-  const customer = new Customer({ name: String(name).trim(), email, phone: phone || undefined });
+  const existing = await Customer.findOne({ email: String(email).toLowerCase() });
+  if (existing && !(existing.isGuest && !existing.passwordHash)) return res.status(409).json({ error: 'An account with this email already exists. Try logging in instead.' });
+  const customer = existing || new Customer({ email, phone: phone || undefined });
+  customer.name = String(name).trim(); customer.isGuest = false; customer.authMethod = 'password';
+  if (existing && phone && !existing.phone) customer.phone = phone;
   await customer.setPassword(password);
   try { await customer.save(); }
   catch (e) { if (e.code === 11000) return res.status(409).json({ error: 'That email or mobile number already has an account. Log in instead (a one-time code is the quickest way).' }); throw e; }
@@ -146,7 +152,7 @@ router.put('/me', requireCustomer, async (req, res) => {
 
 /* ---------- wishlist (kept on the account so it follows the customer across devices) ---------- */
 const Product = require('../models/Product');
-const cardOf = (p) => ({ id: p.id, name: p.name, slug: p.slug, sku: p.sku, price: p.price, mrp: p.mrp, category: p.category, images: (p.images || []).slice(0, 2), available: Math.max(0, p.stock - (p.reserved || 0)), status: p.status });
+const cardOf = (p) => ({ id: p.id, name: p.name, slug: p.slug, sku: p.sku, price: p.price, mrp: p.mrp, category: p.category, subcategory: p.subcategory || '', images: (p.images || []).slice(0, 2), available: Math.max(0, p.stock - (p.reserved || 0)), status: p.status });
 router.get('/me/wishlist', requireCustomer, async (req, res) => { const ps = await Product.find({ _id: { $in: req.customer.wishlist }, status: 'active' }); res.json({ ids: ps.map((p) => p.id), products: ps.map(cardOf) }); });
 // PUT /me/wishlist {ids, merge?} — merge:true adds to what is saved (used when a guest's local wishlist meets their account)
 router.put('/me/wishlist', requireCustomer, async (req, res) => {

@@ -6,6 +6,7 @@ const Product = require('../models/Product');
 router.get('/', async (req, res) => {
   const filter = { status: 'active' };
   if (req.query.category) filter.category = String(req.query.category);
+  if (req.query.subcategory) filter.subcategory = String(req.query.subcategory);
   const sort = req.query.sort === 'price-low' ? { price: 1 } : req.query.sort === 'price-high' ? { price: -1 } : { createdAt: -1 };
   const limit = Math.min(100, parseInt(req.query.limit) || 100);
   res.set('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');

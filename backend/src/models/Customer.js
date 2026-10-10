@@ -25,6 +25,7 @@ const customerSchema = new mongoose.Schema({
   rewardPending: { type: Number, default: 0 },  // earned, waiting for the return window to end
   wishlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
   emailVerified: { type: Boolean, default: false },
+  isGuest: { type: Boolean, default: false }, // saved from a guest checkout (contact record, not a login)
   lastLoginAt: { type: Date, default: null },
   authMethod: { type: String, enum: ['password', 'otp'], default: 'password' },
   passwordHash: { type: String, default: '' },

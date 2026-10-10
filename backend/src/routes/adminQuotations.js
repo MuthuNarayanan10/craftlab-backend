@@ -36,7 +36,7 @@ router.post('/:id/send-email', async (req, res) => {
   const settings = await getSettings();
   const { subject, html } = quotationRequestEmail(quotation, supplier, settings);
   const result = await sendEmail(supplier.email, subject, html);
-  if (result.skipped) return res.status(503).json({ error: 'Email sending is not configured yet (set RESEND_API_KEY and RESEND_FROM on the server). Use WhatsApp for now.' });
+  if (result.skipped) return res.status(503).json({ error: 'Email sending is not configured yet (set BREVO_API_KEY and BREVO_SENDER_EMAIL on the server). Use WhatsApp for now.' });
 
   if (quotation.status === 'Draft') { quotation.status = 'Sent'; await quotation.save(); }
   await logAction('quotation.emailed', req.admin.email, { quotationNumber: quotation.quotationNumber, to: supplier.email });

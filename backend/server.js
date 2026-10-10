@@ -13,6 +13,8 @@ const env = process.env, prod = env.NODE_ENV === 'production';
 if (!env.JWT_SECRET || env.JWT_SECRET.length < 24 || /change-this|secret$/i.test(env.JWT_SECRET)) { logger.error('config_invalid', { error: 'JWT_SECRET must be a long random string (24+ characters)' }); process.exit(1); }
 if (prod && !env.CORS_ORIGIN) { logger.error('config_invalid', { error: 'CORS_ORIGIN must list your storefront/admin domains in production' }); process.exit(1); }
 if (prod && env.RAZORPAY_KEY_ID?.startsWith('rzp_live_') && !env.RAZORPAY_WEBHOOK_SECRET) logger.warn('config_warning', { warning: 'Live Razorpay keys without RAZORPAY_WEBHOOK_SECRET — payments will only confirm via the browser callback + reconciliation' });
+if (!!env.BREVO_API_KEY !== !!env.BREVO_SENDER_EMAIL) logger.warn('config_warning', { warning: 'Email OTP needs BOTH BREVO_API_KEY and BREVO_SENDER_EMAIL — one is missing, so email login is off' });
+else if (env.BREVO_API_KEY) logger.info('otp_ready', { provider: 'brevo', via: 'environment variables' });
 if (!env.SECRETS_KEY) logger.warn('config_warning', { warning: 'SECRETS_KEY is not set — courier / SMS / WhatsApp API keys cannot be stored from the admin until it is' });
 
 const PORT = env.PORT || 4000;

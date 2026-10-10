@@ -4,13 +4,22 @@ const Product = require('../models/Product');
 const { adjustStock } = require('../services/inventory');
 const { audit } = require('../models/AuditLog');
 
-const FIELDS = ['name', 'slug', 'sku', 'shortDescription', 'longDescription', 'price', 'mrp', 'category', 'tags', 'material', 'dimensions', 'weight', 'features', 'careInstructions', 'whatsIncluded', 'images', 'lowStockThreshold', 'seoTitle', 'seoDescription', 'status'];
+const FIELDS = ['name', 'slug', 'sku', 'shortDescription', 'longDescription', 'price', 'mrp', 'category', 'subcategory', 'tags', 'material', 'dimensions', 'weight', 'features', 'careInstructions', 'whatsIncluded', 'images', 'lowStockThreshold', 'seoTitle', 'seoDescription', 'status'];
 const pick = (body) => Object.fromEntries(FIELDS.filter((k) => body[k] !== undefined).map((k) => [k, body[k]]));
 
 router.get('/', async (req, res) => res.json(await Product.find().sort({ createdAt: -1 })));
 
+const cats = require('../services/categories');
+async function applyCategory(body, data, existing) {
+  if (body.category === undefined && body.subcategory === undefined) return null;
+  const r = await cats.resolve(body.category !== undefined ? body.category : existing?.category, body.subcategory !== undefined ? body.subcategory : (body.category !== undefined ? '' : existing?.subcategory));
+  if (r.error) return r.error;
+  data.category = r.category || existing?.category || 'Home Decor'; data.subcategory = r.subcategory; return null;
+}
+
 router.post('/', async (req, res) => {
   const data = pick(req.body);
+  const catErr = await applyCategory(req.body, data, null); if (catErr) return res.status(400).json({ error: catErr });
   const initial = Math.max(0, parseInt(req.body.stock, 10) || 0);
   const product = await Product.create({ ...data, stock: 0 });
   if (initial) await adjustStock(product.id, initial, { reason: 'initial_stock', actor: req.admin.email });
@@ -22,7 +31,9 @@ router.put('/:id', async (req, res) => {
   const product = await Product.findById(req.params.id);
   if (!product) return res.status(404).json({ error: 'Product not found' });
   const before = { price: product.price, mrp: product.mrp, status: product.status };
-  Object.assign(product, pick(req.body));
+  const data = pick(req.body);
+  const catErr = await applyCategory(req.body, data, product); if (catErr) return res.status(400).json({ error: catErr });
+  Object.assign(product, data);
   await product.save();
   // stock is only ever changed through the ledger, so every change has a reason and a history
   if (req.body.stock !== undefined) {

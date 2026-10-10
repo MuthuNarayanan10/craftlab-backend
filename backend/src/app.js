@@ -45,7 +45,8 @@ function createApp() {
   app.use('/api/checkout', limiter(15, 60, 'Too many checkout attempts. Please wait a few minutes.'));
   app.use(['/api/contact', '/api/subscribers'], limiter(60, 20));
   app.use('/api/rewards/gift-card', limiter(15, 15, 'Too many gift-card checks. Please try again later.'));
-  app.use('/api/support', (req, res, next) => (req.method === 'POST' && req.path === '/' ? limiter(60, 10, 'Too many requests. Please try again later or WhatsApp us.')(req, res, next) : next()));
+  const supportLimiter = limiter(60, 10, 'Too many requests. Please try again later or WhatsApp us.'); // created ONCE — a limiter built per request never counts anything
+  app.use('/api/support', (req, res, next) => (req.method === 'POST' && req.path === '/' ? supportLimiter(req, res, next) : next()));
 
   // Razorpay needs the RAW body to verify its signature, so it is mounted before any JSON parser.
   const payments = require('./routes/payments');
@@ -78,6 +79,7 @@ function createApp() {
   app.use('/api/pincode', require('./routes/pincode'));
   app.use('/api/search', require('./routes/search'));
   app.use('/api/collections', require('./routes/collections'));
+  app.use('/api/categories', require('./routes/categories'));
   app.use('/api/support', require('./routes/support'));
   app.use('/api/rewards', require('./routes/rewards'));
   app.use('/api/webhooks', require('./routes/webhooks'));            // courier tracking pushes (shared-secret token)
@@ -97,6 +99,7 @@ function createApp() {
   admin('support', 'adminSupport');
   admin('rewards', 'adminRewards');
   admin('catalog', 'adminCatalog');
+  admin('categories', 'adminCategories');
   admin('coupons', 'adminCoupons');
   admin('abandoned-carts', 'abandoned');
   admin('suppliers', 'adminSuppliers');

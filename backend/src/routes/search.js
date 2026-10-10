@@ -3,7 +3,7 @@ const router = express.Router();
 const Product = require('../models/Product');
 
 const rx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const card = (p) => ({ id: p.id, name: p.name, slug: p.slug, sku: p.sku, price: p.price, mrp: p.mrp, category: p.category, images: (p.images || []).slice(0, 2), available: Math.max(0, p.stock - (p.reserved || 0)), shortDescription: p.shortDescription });
+const card = (p) => ({ id: p.id, name: p.name, slug: p.slug, sku: p.sku, price: p.price, mrp: p.mrp, category: p.category, subcategory: p.subcategory || '', images: (p.images || []).slice(0, 2), available: Math.max(0, p.stock - (p.reserved || 0)), shortDescription: p.shortDescription });
 const discount = (p) => (p.mrp > p.price ? (p.mrp - p.price) / p.mrp : 0);
 
 /** Every word must appear in the name, SKU, category, tags or short description. */
@@ -40,6 +40,7 @@ router.get('/', async (req, res) => {
   const facets = { categories: Object.entries(all.reduce((m, p) => ((m[p.category] = (m[p.category] || 0) + 1), m), {})).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count), minPrice: all.length ? Math.min(...all.map((p) => p.price)) : 0, maxPrice: all.length ? Math.max(...all.map((p) => p.price)) : 0 };
   let list = all;
   if (req.query.category) list = list.filter((p) => p.category === String(req.query.category));
+  if (req.query.subcategory) list = list.filter((p) => p.subcategory === String(req.query.subcategory));
   const min = Number(req.query.minPrice), max = Number(req.query.maxPrice);
   if (Number.isFinite(min) && min > 0) list = list.filter((p) => p.price >= min); if (Number.isFinite(max) && max > 0) list = list.filter((p) => p.price <= max);
   if (req.query.inStock === '1') list = list.filter((p) => p.stock - (p.reserved || 0) > 0);

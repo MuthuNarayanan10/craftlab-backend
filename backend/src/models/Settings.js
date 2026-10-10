@@ -52,6 +52,7 @@ const settingsSchema = new mongoose.Schema({
   giftCardsEnabled: { type: Boolean, default: true },
   stockHoldMinutes: { type: Number, default: 10, min: 3, max: 60 }, // how long stock is held for a customer in checkout / awaiting payment
   supportHours: { type: String, default: 'Mon–Sat 10 AM – 6 PM IST' },
+  categories: { type: [{ name: String, slug: String, subcategories: { type: [{ name: String, slug: String, _id: false }], default: [] }, _id: false }], default: [] }, // shop categories → optional sub-categories (managed in Admin → Categories)
   collections: { type: [{ key: String, title: String, enabled: { type: Boolean, default: true }, mode: { type: String, default: 'manual' }, limit: { type: Number, default: 8 }, _id: false }], default: [
     { key: 'featured', title: 'Featured Products', enabled: true, mode: 'manual', limit: 8 }, { key: 'new-arrivals', title: 'New Arrivals', enabled: true, mode: 'auto', limit: 8 },
     { key: 'best-sellers', title: 'Best Sellers', enabled: true, mode: 'auto', limit: 8 }, { key: 'recommended', title: 'Recommended For You', enabled: false, mode: 'manual', limit: 8 }] },
@@ -65,6 +66,8 @@ async function getSettings() {
     try { doc = await Settings.create({ key: 'business' }); }
     catch (e) { doc = await Settings.findOne({ key: 'business' }); } // lost a creation race — unique index guarantees one doc
   }
+  // Brevo env vars present and the owner hasn't picked a login method → email OTP is simply on (in memory; nothing to configure)
+  if (doc.otpProvider === 'none' && require('../utils/otp/brevoEnv').brevoFromEnv()) { doc.otpProvider = 'brevo'; doc.otpEnabled = true; }
   return doc;
 }
 

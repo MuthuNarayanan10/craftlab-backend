@@ -10,6 +10,9 @@ const ticketSchema = new mongoose.Schema({
   name: { type: String, required: true, maxlength: 80 }, phone: { type: String, default: '' }, email: { type: String, default: '', lowercase: true, trim: true },
   orderNumber: { type: String, default: '', index: true },
   subject: { type: String, required: true, maxlength: 140 },
+  queryType: { type: String, default: '', maxlength: 40 },   // pre-defined topic picked on the form (Product question, Shipping, …)
+  category: { type: String, default: '', maxlength: 80 }, subcategory: { type: String, default: '', maxlength: 80 },
+  productName: { type: String, default: '', maxlength: 140 }, productSku: { type: String, default: '', maxlength: 60 },
   status: { type: String, enum: STATUSES, default: 'New' },
   messages: [messageSchema],
   lastCustomerMessageAt: { type: Date, default: Date.now },

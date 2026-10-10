@@ -4,7 +4,7 @@ const Product = require('../models/Product');
 const StockMovement = require('../models/StockMovement');
 const { getSettings } = require('../models/Settings');
 
-const card = (p) => ({ id: p.id, name: p.name, slug: p.slug, sku: p.sku, price: p.price, mrp: p.mrp, category: p.category, images: (p.images || []).slice(0, 2), available: Math.max(0, p.stock - (p.reserved || 0)), shortDescription: p.shortDescription });
+const card = (p) => ({ id: p.id, name: p.name, slug: p.slug, sku: p.sku, price: p.price, mrp: p.mrp, category: p.category, subcategory: p.subcategory || '', images: (p.images || []).slice(0, 2), available: Math.max(0, p.stock - (p.reserved || 0)), shortDescription: p.shortDescription });
 
 async function productsFor(c) {
   const limit = Math.min(24, Math.max(1, c.limit || 8));

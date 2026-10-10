@@ -35,6 +35,7 @@ async function validateCoupon(code, subtotal) {
 }
 const cleanPhone = (p) => { const d = String(p || '').replace(/\D/g, ''); const t = d.length > 10 ? d.slice(-10) : d; return /^[6-9]\d{9}$/.test(t) ? '+91' + t : ''; };
 const errorMessage = (e) => e?.message || e?.error?.description || 'Something went wrong. Please try again.';
+const { captureGuest } = require('../services/guestCapture');
 const str = (v, n = 60) => String(v || '').slice(0, n);
 
 // POST /api/checkout
@@ -147,6 +148,7 @@ router.post('/', optionalCustomer, async (req, res) => {
     });
     try { order = await build(await generateOrderNumber()); }
     catch (e) { if (e.code === 11000 && !String(e.message).includes('idempotencyKey')) order = await build(await generateOrderNumber()); else throw e; }
+    if (!customerAcct) await captureGuest(order.customer); // guest buyers are still saved as customers (admin can see them)
 
     if (coupon) { // atomic: the usage limit can never be exceeded by simultaneous checkouts
       const ok = await Coupon.findOneAndUpdate({ _id: coupon._id, $or: [{ usageLimit: null }, { $expr: { $lt: ['$usedCount', '$usageLimit'] } }] }, { $inc: { usedCount: 1 } });

@@ -75,7 +75,7 @@ function createNotifier({ logStore, channels, enabled }) {
 }
 
 /* ------------- real channel adapters ------------- */
-function emailChannel(sendEmail) { return { id: 'email', async send({ to, subject, html }) { const r = await sendEmail(to, subject, html); if (r?.skipped) throw Object.assign(new Error('Email is not configured (RESEND_API_KEY / RESEND_FROM)'), { skipped: true }); if (r?.error) throw new Error(r.error); } }; }
+function emailChannel(sendEmail) { return { id: 'email', async send({ to, subject, html }) { const r = await sendEmail(to, subject, html); if (r?.skipped) throw Object.assign(new Error('Email is not configured (BREVO_API_KEY / BREVO_SENDER_EMAIL)'), { skipped: true }); if (r?.error) throw new Error(r.error); } }; }
 
 /** WhatsApp Business Cloud API (Meta) — sends ONE approved template with 3 body variables: {{1}} name, {{2}} order number, {{3}} message.
  *  Requires a Meta business account, a verified WhatsApp number and an approved template — see docs. Not validated against a live account. */

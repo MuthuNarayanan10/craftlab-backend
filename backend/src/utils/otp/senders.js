@@ -43,7 +43,8 @@ function brevoSender({ apiKey, senderEmail, senderName = 'The Craft Lab', baseUr
     async send(email, code) {
       const m = otpEmail(code, senderName);
       const res = await fetchImpl(`${baseUrl}/v3/smtp/email`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'api-key': apiKey }, body: JSON.stringify({ sender: { name: senderName, email: senderEmail }, to: [{ email }], subject: m.subject, htmlContent: m.html }) });
-      if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(`Brevo rejected the email: ${j.message || res.status}`); }
+      if (!res.ok) { const j = await res.json().catch(() => ({})); const hint = res.status === 401 ? ' — the API key is wrong or was deleted (generate a new one in Brevo → SMTP & API)' : /sender|valid|not.*allowed|domain/i.test(String(j.message)) ? ' — the sender address isn’t verified in Brevo yet. Use the email you signed up to Brevo with, or verify the address under Senders in Brevo' : '';
+        throw new Error(`Brevo rejected the email: ${j.message || res.status}${hint}`); }
     },
   };
 }

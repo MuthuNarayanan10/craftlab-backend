@@ -19,6 +19,18 @@ const CATALOG = {
   whatsapp_cloud: { kind: 'whatsapp', label: 'WhatsApp Business Cloud API', secrets: ['accessToken'], config: ['phoneNumberId', 'templateName', 'languageCode'], help: 'Needs a Meta Business account, a verified WhatsApp number and an approved message template with 3 variables ({{1}} name, {{2}} order number, {{3}} message).' },
 };
 
+const { brevoFromEnv } = require('../utils/otp/brevoEnv');
+
+// Email-OTP status (set through BREVO_* environment variables) and a one-click test that sends ONE real code
+router.get('/otp-env', (req, res) => { const e = brevoFromEnv(); res.json({ configured: !!e, senderEmail: e ? e.senderEmail : '', missing: [!process.env.BREVO_API_KEY && 'BREVO_API_KEY', !process.env.BREVO_SENDER_EMAIL && 'BREVO_SENDER_EMAIL'].filter(Boolean) }); });
+router.post('/otp-env/test', requireRole('ADMIN'), async (req, res) => {
+  const e = brevoFromEnv(); if (!e) return res.status(400).json({ error: 'Add BREVO_API_KEY and BREVO_SENDER_EMAIL as environment variables first, then redeploy' });
+  const to = String(req.body.email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(to)) return res.status(400).json({ error: 'Enter an email address to send ONE test code to' });
+  try { await brevoSender({ ...e, senderName: e.senderName || (await getSettings()).businessName, baseUrl: process.env.BREVO_BASE_URL || undefined }).send(to, String(Math.floor(100000 + Math.random() * 900000))); res.json({ ok: true, message: `Test code emailed to ${to}` }); }
+  catch (err) { res.json({ ok: false, message: String(err.message).slice(0, 300) }); }
+});
+
 router.get('/', async (req, res) => {
   const saved = await Integration.find();
   const settings = await getSettings();

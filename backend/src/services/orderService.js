@@ -12,7 +12,7 @@ const { canTransition, isCod } = require('../utils/orderStatus');
 const { pushEvent } = require('../utils/orderEvents');
 const { audit } = require('../models/AuditLog');
 const { logger } = require('../utils/logger');
-const { sendEmail, newOrderAlertEmail } = require('../utils/email');
+const { sendEmail, newOrderAlertEmail, ownerRecipients } = require('../utils/email');
 
 const STAGE = { Processing: 'processing', Packed: 'packed', Dispatched: 'handed', InTransit: 'transit', OutForDelivery: 'out', Delivered: 'delivered' };
 const NOTIFY = { Packed: 'order_packed', Dispatched: 'order_shipped', OutForDelivery: 'out_for_delivery', Delivered: 'delivered', Cancelled: 'order_cancelled' };
@@ -31,9 +31,10 @@ async function ensureInvoice(order, settings) {
 }
 
 async function alertOwner(order, settings) {
-  if (!settings.email) return;
+  const to = ownerRecipients(settings);
+  if (!to.length) return;
   const a = newOrderAlertEmail(order);
-  sendEmail(settings.email, a.subject, a.html);
+  sendEmail(to, a.subject, a.html, order.customer?.email ? { replyTo: order.customer.email } : {}).catch(() => {});
 }
 
 function triggerAutoShipment(order, settings) {

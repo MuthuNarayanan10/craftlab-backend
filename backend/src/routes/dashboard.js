@@ -138,7 +138,7 @@ router.get('/overview', async (req, res) => {
       razorpayConfigured: !!(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET),
       razorpayLive: (env.RAZORPAY_KEY_ID || '').startsWith('rzp_live_'),
       webhookSecret: !!env.RAZORPAY_WEBHOOK_SECRET,
-      emailConfigured: !!(env.RESEND_API_KEY && env.RESEND_FROM),
+      emailConfigured: require('../utils/email').isEmailConfigured(env),
       otpConfigured: !!env.FIREBASE_SERVICE_ACCOUNT_JSON,
       gstinSet: !!settings.gstin,
       whatsappSet: !!settings.supportWhatsapp,

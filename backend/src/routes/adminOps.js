@@ -54,7 +54,7 @@ router.get('/system/health', async (req, res) => {
     problems: { failedNotifications: failedNotifs, failedWebhooks: failedHooks, shipmentErrors, stalePendingPayments: stalePending, inventoryInconsistencies: badStock },
     config: {
       razorpayConfigured: !!(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET), razorpayLive: (env.RAZORPAY_KEY_ID || '').startsWith('rzp_live_'), webhookSecret: !!env.RAZORPAY_WEBHOOK_SECRET,
-      emailConfigured: !!(env.RESEND_API_KEY && env.RESEND_FROM), secretsStorageReady: isConfigured(),
+      emailConfigured: require('../utils/email').isEmailConfigured(env), secretsStorageReady: isConfigured(),
       otpReady: settings.otpEnabled && (settings.otpProvider === 'dev' ? env.NODE_ENV !== 'production' : settings.otpProvider === 'firebase' ? !!env.FIREBASE_SERVICE_ACCOUNT_JSON : settings.otpProvider === 'msg91' && smsOn > 0),
       otpProvider: settings.otpProvider, courierEnabled: courierOn > 0, whatsappEnabled: waOn > 0 && settings.notifyWhatsappEnabled, nodeEnv: env.NODE_ENV || 'development',
     },

@@ -878,4 +878,97 @@ test('REWARDS admin: summary, customer lookup with history, adjustments are audi
   const d = (await adm('get', '/rewards/customers/' + f[0].id)).body; assert.ok(Array.isArray(d.ledger)); assert.ok(await M.AuditLog.findOne({ action: 'rewards.adjusted' })); assert.ok(await M.AuditLog.findOne({ action: 'giftcard.issued' })); assert.equal((await request(app).get('/api/admin/rewards/summary')).status, 401);
 });
 
+
+/* ================= v6: guest customers, categories, env-only Brevo OTP ================= */
+test('guest checkout is saved as a (guest) customer; admin can filter it; a later OTP login turns it into a real account', async () => {
+  const { getSettings } = require('../src/models/Settings'); const st = await getSettings();
+  Object.assign(st, { guestCheckoutEnabled: true, requireMobileVerification: false, otpProvider: 'dev', otpChannel: 'email', otpEnabled: true, codEnabled: true }); await st.save();
+  const go = async (name) => { const cartId = await cartWith([[S.p1, 1]]); return request(app).post('/api/checkout').send({ cartId, paymentMethod: 'cod', customer: { name, phone: '9123456780', email: 'Guest.Buyer@Example.com' }, address: addr }); };
+  const r1 = await go('Guest Buyer'); assert.equal(r1.status, 201, JSON.stringify(r1.body));
+  const g = await M.Customer.find({ email: 'guest.buyer@example.com' }); assert.equal(g.length, 1); assert.equal(g[0].isGuest, true); assert.equal(g[0].phone, '+919123456780'); assert.equal(g[0].name, 'Guest Buyer');
+  const order = await M.Order.findById(r1.body.orderId); assert.equal(order.customerId, null, 'a guest order is not attached to the contact record');
+  assert.equal((await go('Guest Buyer')).status, 201); assert.equal(await M.Customer.countDocuments({ email: 'guest.buyer@example.com' }), 1, 'same contact, same record');
+  const gl = (await adm('get', '/customers?type=guest')).body.customers.find((c) => c.email === 'guest.buyer@example.com'); assert.ok(gl, 'listed under Guests'); assert.equal(gl.isGuest, true); assert.equal(gl.orderCount, 2);
+  assert.ok(!(await adm('get', '/customers?type=registered')).body.customers.some((c) => c.email === 'guest.buyer@example.com'), 'not listed under Registered');
+  const detail = (await adm('get', '/customers/' + gl.id)).body; assert.equal(detail.orders.length, 2, 'admin sees the guest’s orders');
+  await clearOtpCooldown(); const s1 = await request(app).post('/api/customers/otp/send').send({ email: 'guest.buyer@example.com' }); assert.equal(s1.status, 200);
+  const v = await request(app).post('/api/customers/otp/verify').send({ termsAccepted: true, email: 'guest.buyer@example.com', code: s1.body.devCode }); assert.equal(v.status, 200);
+  assert.equal(v.body.isNewCustomer, false); const after = await M.Customer.find({ email: 'guest.buyer@example.com' }); assert.equal(after.length, 1); assert.equal(after[0].isGuest, false); assert.equal(after[0].emailVerified, true);
+});
+
+test('categories: optional sub-categories, validation, rename, in-use protection, public tree and filters', async () => {
+  assert.equal((await adm('put', '/categories', { categories: [{ name: 'Racks' }] }, tokens.staff)).status, 403, 'owner only');
+  const others = (await adm('get', '/categories')).body.categories.filter((c) => !['Wall Racks', 'Planters', 'Racks'].includes(c.name)).map((c) => ({ name: c.name, subcategories: c.subcategories.map((x) => ({ name: x.name })) })); // categories other tests' products already use
+  const save = (categories) => adm('put', '/categories', { categories: [...categories, ...others] });
+  const ok = await save([{ name: 'Wall Racks', subcategories: [{ name: 'Hooks' }, { name: 'Shelves' }] }, { name: 'Planters' }]); assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal((await save([{ name: 'A' }, { name: 'a' }])).status, 400, 'duplicate names refused');
+  const mk = (extra) => adm('post', '/products', { name: 'Cat Test ' + Math.random().toString(36).slice(2, 6), slug: 'cat-' + Math.random().toString(36).slice(2, 8), sku: 'CT' + Math.random().toString(36).slice(2, 8), price: 100, mrp: 120, stock: 2, ...extra });
+  const withSub = await mk({ category: 'Wall Racks', subcategory: 'Hooks' }); assert.equal(withSub.status, 201); assert.equal(withSub.body.subcategory, 'Hooks');
+  const noSub = await mk({ category: 'Planters' }); assert.equal(noSub.status, 201); assert.equal(noSub.body.subcategory, '', 'no sub-category chosen = none');
+  assert.equal((await mk({ category: 'Planters', subcategory: 'Hooks' })).status, 400, 'sub-category must belong to the category');
+  assert.equal((await mk({ category: 'Nope' })).status, 400, 'unknown category refused');
+  const pub = (await request(app).get('/api/categories')).body.categories; const wr = pub.find((c) => c.name === 'Wall Racks');
+  assert.ok(wr && wr.count === 1 && wr.subcategories.length === 1 && wr.subcategories[0].name === 'Hooks', 'only sub-categories with products are shown'); assert.ok(!pub.some((c) => c.count === 0));
+  const f = (await request(app).get('/api/products').query({ category: 'Wall Racks', subcategory: 'Hooks' })).body; assert.equal(f.length, 1); assert.equal(f[0].id, withSub.body.id);
+  const sr = (await request(app).get('/api/search').query({ category: 'Wall Racks', subcategory: 'Hooks' })).body; assert.equal(sr.total, 1);
+  const inUse = await save([{ name: 'Wall Racks', subcategories: [{ name: 'Shelves' }] }, { name: 'Planters' }]); assert.equal(inUse.status, 400); assert.match(inUse.body.error, /Hooks/);
+  const delCat = await save([{ name: 'Wall Racks', subcategories: [{ name: 'Hooks' }, { name: 'Shelves' }] }]); assert.equal(delCat.status, 400); assert.match(delCat.body.error, /Planters/);
+  const ren = await save([{ name: 'Wall Racks', subcategories: [{ name: 'Wall Hooks', was: 'Hooks' }, { name: 'Shelves' }] }, { name: 'Planters' }]); assert.equal(ren.status, 200);
+  assert.equal((await M.Product.findById(withSub.body.id)).subcategory, 'Wall Hooks', 'renaming updates the products');
+  const ren2 = await save([{ name: 'Racks', was: 'Wall Racks', subcategories: [{ name: 'Wall Hooks' }, { name: 'Shelves' }] }, { name: 'Planters' }]); assert.equal(ren2.status, 200);
+  const p = await M.Product.findById(withSub.body.id); assert.equal(p.category, 'Racks'); assert.equal(p.subcategory, 'Wall Hooks');
+  const list = (await adm('get', '/categories')).body.categories; assert.equal(list.find((c) => c.name === 'Racks').productCount, 1);
+  const mv = await adm('put', '/products/' + withSub.body.id, { category: 'Planters' }); assert.equal(mv.status, 200); assert.equal(mv.body.subcategory, '', 'moving category clears a sub-category that no longer applies');
+});
+
+test('email OTP works from BREVO_* environment variables alone — nothing configured in the admin', async () => {
+  const { getSettings } = require('../src/models/Settings'); const st = await getSettings();
+  Object.assign(st, { otpProvider: 'none', otpEnabled: true, otpChannel: 'sms' }); await st.save(); await M.Integration.deleteMany({});
+  assert.equal((await request(app).get('/api/customers/auth-options')).body.otpEnabled, false, 'without the variables there is no OTP');
+  assert.deepEqual((await adm('get', '/integrations/otp-env')).body.missing, ['BREVO_API_KEY', 'BREVO_SENDER_EMAIL']);
+  process.env.BREVO_API_KEY = 'xkeysib-env-key'; process.env.BREVO_SENDER_EMAIL = 'care@shop.test';
+  try {
+    const opt = (await request(app).get('/api/customers/auth-options')).body; assert.equal(opt.otpEnabled, true); assert.equal(opt.otpChannel, 'email'); assert.equal(opt.otpProvider, 'brevo');
+    await clearOtpCooldown(); otpMails.length = 0;
+    const s = await request(app).post('/api/customers/otp/send').send({ email: 'envuser@example.com' }); assert.equal(s.status, 200, JSON.stringify(s.body)); assert.equal(s.body.devCode, undefined);
+    const mail = otpMails.at(-1); assert.equal(mail.headers['api-key'], 'xkeysib-env-key'); assert.equal(mail.body.sender.email, 'care@shop.test'); const code = mail.body.subject.match(/^(\d{6})/)[1];
+    const v = await request(app).post('/api/customers/otp/verify').send({ termsAccepted: true, email: 'envuser@example.com', code }); assert.equal(v.status, 200); assert.equal(v.body.customer.emailVerified, true);
+    assert.equal((await request(app).post('/api/customers/otp/verify').send({ email: 'envuser@example.com', code })).status, 400, 'terms still required');
+    const status = (await adm('get', '/integrations/otp-env')).body; assert.equal(status.configured, true); assert.equal(status.senderEmail, 'care@shop.test');
+    otpMails.length = 0; const t = await adm('post', '/integrations/otp-env/test', { email: 'me@example.com' }); assert.equal(t.body.ok, true); assert.equal(otpMails.length, 1);
+    assert.equal((await adm('post', '/integrations/otp-env/test', { email: 'me@example.com' }, tokens.staff)).status, 403);
+    assert.equal(JSON.stringify((await adm('get', '/integrations')).body).includes('xkeysib-env-key'), false, 'the key is never returned by any API');
+  } finally { delete process.env.BREVO_API_KEY; delete process.env.BREVO_SENDER_EMAIL; }
+  assert.equal((await request(app).get('/api/customers/auth-options')).body.otpEnabled, false);
+});
+
+test('care@ mailbox: order alerts + support tickets are emailed through Brevo, tickets carry topic / category / sub-category / product', async () => {
+  const { getSettings } = require('../src/models/Settings'); const st = await getSettings(); st.email = 'care@shop.test'; await st.save();
+  process.env.BREVO_API_KEY = 'xkeysib-mail-key'; process.env.BREVO_SENDER_EMAIL = 'care@shop.test'; process.env.BREVO_SENDER_NAME = 'The Craft Lab';
+  const prod = await M.Product.findOne({ status: 'active' });
+  try {
+    otpMails.length = 0;
+    const t = await request(app).post('/api/support').send({ name: 'Pre Sales', email: 'pre@example.com', subject: 'Does it fit brick walls?', message: 'Need to know about mounting', queryType: 'Product question', productSlug: prod.slug });
+    assert.equal(t.status, 201, JSON.stringify(t.body)); await wait(300);
+    const doc = await M.SupportTicket.findById(t.body.id); assert.equal(doc.queryType, 'Product question'); assert.equal(doc.productName, prod.name); assert.equal(doc.category, prod.category || '');
+    const alert = otpMails.find((m) => /New support request/.test(m.body.subject)); assert.ok(alert, 'ticket alert sent via Brevo');
+    assert.equal(alert.headers['api-key'], 'xkeysib-mail-key'); assert.equal(alert.body.sender.email, 'care@shop.test'); assert.equal(alert.body.to[0].email, 'care@shop.test'); assert.equal(alert.body.replyTo.email, 'pre@example.com'); assert.ok(alert.body.htmlContent.includes('Product question') && alert.body.htmlContent.includes(prod.name));
+    assert.ok(otpMails.find((m) => m.body.to[0].email === 'pre@example.com' && m.body.htmlContent.includes(t.body.ticketNumber)), 'customer gets the reference');
+    const bad = await request(app).post('/api/support').send({ name: 'X', email: 'x@example.com', subject: 'Hello there', message: 'Some message', queryType: 'Hacked', productSlug: 'nope', subcategory: 'Ghost' });
+    assert.equal(bad.status, 201); const d2 = await M.SupportTicket.findById(bad.body.id); assert.equal(d2.queryType, ''); assert.equal(d2.productName, ''); assert.equal(d2.subcategory, '', 'sub-category without a category is dropped');
+    assert.equal((await adm('get', '/system/health')).body.emailConfigured ?? true, true);
+    process.env.OWNER_ALERT_EMAIL = 'a@shop.test, b@shop.test'; otpMails.length = 0;
+    await request(app).post('/api/support').send({ name: 'Two', email: 'two@example.com', subject: 'Two owners', message: 'Both should be told' }); await wait(300);
+    const both = otpMails.find((m) => /New support request/.test(m.body.subject)); assert.deepEqual(both.body.to.map((x) => x.email), ['a@shop.test', 'b@shop.test']);
+  } finally { delete process.env.BREVO_API_KEY; delete process.env.BREVO_SENDER_EMAIL; delete process.env.BREVO_SENDER_NAME; delete process.env.OWNER_ALERT_EMAIL; st.email = 'owner@shop.test'; await st.save(); }
+});
+
+test('ticket form is rate-limited (the limiter really counts) so nobody can flood the care@ mailbox', async () => {
+  const keep = process.env.RATE_LIMIT_SCALE; process.env.RATE_LIMIT_SCALE = '1'; let app3; try { app3 = require('../src/app').createApp(); } finally { process.env.RATE_LIMIT_SCALE = keep; }
+  const body = { name: 'Spam', email: 'spam@example.com', subject: 'Hello there', message: 'Spam message here' }; let last;
+  for (let i = 0; i < 11; i++) last = await request(app3).post('/api/support').send(body);
+  assert.equal(last.status, 429, 'the 11th ticket in an hour from one network is refused');
+  assert.equal((await request(app3).get('/api/support/query-types')).status, 200, 'reading is never limited');
+});
+
 test('TEARDOWN', async () => { await db.stop(); courierServer.close(); setTimeout(() => process.exit(0), 200).unref(); });
