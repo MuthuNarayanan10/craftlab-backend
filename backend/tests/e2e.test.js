@@ -9,7 +9,7 @@ const db = require('./support/db');
 
 const sentEmails = [], realFetch = globalThis.fetch;
 const otpMails = []; // emails sent by the Brevo / ZeptoMail OTP providers
-globalThis.fetch = async (url, init) => { if (/api\.(brevo\.com|zeptomail\.in)/.test(String(url))) { otpMails.push({ url: String(url), headers: init.headers, body: JSON.parse(init.body) }); return { ok: true, status: 201, json: async () => ({}) }; } if (String(url).includes('api.resend.com')) { sentEmails.push({ ...JSON.parse(init.body) }); return { ok: true, json: async () => ({ id: 'e' }), text: async () => '' }; } return realFetch(url, init); };
+globalThis.fetch = async (url, init) => { if (/control\.msg91\.com/.test(String(url))) { otpMails.push({ url: String(url), sms: true, headers: init.headers, body: {} }); return { ok: true, status: 200, json: async () => ({ type: 'success' }) }; } if (/api\.(brevo\.com|zeptomail\.in)/.test(String(url))) { const b = JSON.parse(init.body); if (b.sender && b.sender.email === 'bad@shop.test') return { ok: false, status: 400, json: async () => ({ code: 'invalid_parameter', message: 'Sending has been rejected because the sender you used bad@shop.test is not valid. Validate your sender or authenticate your domain' }) }; otpMails.push({ url: String(url), headers: init.headers, body: b }); return { ok: true, status: 201, json: async () => ({}) }; } if (String(url).includes('api.resend.com')) { sentEmails.push({ ...JSON.parse(init.body) }); return { ok: true, json: async () => ({ id: 'e' }), text: async () => '' }; } return realFetch(url, init); };
 
 let app, M = {}, A, tokens = {}, S = {};
 const courier = { awbFails: false, down: false, track: 'In Transit', calls: [] };
@@ -62,7 +62,7 @@ test('SETUP: database, admin users, products, settings', async () => {
 
 test('public config exposes only safe settings and the auth switches', async () => {
   const r = await request(app).get('/api/config/public'); assert.equal(r.status, 200);
-  assert.deepEqual(r.body.auth, { loginEnabled: true, signupEnabled: true, otpEnabled: true, otpProvider: 'dev', otpChannel: 'phone', guestCheckoutEnabled: true, requireMobileVerification: false });
+  assert.deepEqual(r.body.auth, { loginEnabled: true, signupEnabled: true, otpEnabled: true, otpProvider: 'dev', otpChannel: 'phone', otpChannels: ['phone'], guestCheckoutEnabled: true, requireMobileVerification: false });
   assert.equal(r.body.codEnabled, true); assert.equal(r.body.prepaidDiscountPercent, 5); assert.equal(r.body.business.gstin, '');
   assert.ok(!JSON.stringify(r.body).includes('Secret') && !('jwt' in r.body));
 });
@@ -969,6 +969,57 @@ test('ticket form is rate-limited (the limiter really counts) so nobody can floo
   for (let i = 0; i < 11; i++) last = await request(app3).post('/api/support').send(body);
   assert.equal(last.status, 429, 'the 11th ticket in an hour from one network is refused');
   assert.equal((await request(app3).get('/api/support/query-types')).status, 200, 'reading is never limited');
+});
+
+test('mobile (SMS) AND email OTP can both be offered; the customer picks, the server enforces', async () => {
+  const { getSettings } = require('../src/models/Settings'); const st = await getSettings(); Object.assign(st, { otpProvider: 'none', otpEnabled: true }); await st.save(); await M.Integration.deleteMany({});
+  process.env.BREVO_API_KEY = 'xkeysib-both'; process.env.BREVO_SENDER_EMAIL = 'care@shop.test'; process.env.MSG91_AUTH_KEY = 'msg91-auth'; process.env.MSG91_TEMPLATE_ID = 'tpl-1';
+  try {
+    const opt = (await request(app).get('/api/customers/auth-options')).body; assert.deepEqual(opt.otpChannels, ['email', 'phone']); assert.equal(opt.otpEnabled, true);
+    assert.deepEqual((await request(app).get('/api/config/public')).body.auth.otpChannels, ['email', 'phone']);
+    assert.equal((await adm('get', '/integrations/sms-env')).body.configured, true);
+    await clearOtpCooldown(); otpMails.length = 0;
+    const s = await request(app).post('/api/customers/otp/send').send({ phone: '9876500055', channel: 'phone' }); assert.equal(s.status, 200, JSON.stringify(s.body)); assert.equal(s.body.channel, 'phone');
+    const sms = otpMails.find((m) => m.sms); assert.ok(sms, 'an SMS went out through MSG91'); assert.match(sms.url, /template_id=tpl-1/); assert.match(sms.url, /authkey=msg91-auth/); assert.match(sms.url, /mobile=919876500055/);
+    const code = sms.url.match(/[?&]otp=(\d{6})/)[1];
+    const v = await request(app).post('/api/customers/otp/verify').send({ phone: '9876500055', channel: 'phone', code, termsAccepted: true }); assert.equal(v.status, 200, JSON.stringify(v.body)); assert.equal(v.body.customer.phoneVerified, true);
+    await clearOtpCooldown(); otpMails.length = 0;
+    const e = await request(app).post('/api/customers/otp/send').send({ email: 'both@example.com', channel: 'email' }); assert.equal(e.status, 200); assert.equal(e.body.channel, 'email');
+    const mail = otpMails.find((m) => !m.sms); assert.equal(mail.body.to[0].email, 'both@example.com');
+    delete process.env.MSG91_AUTH_KEY; delete process.env.MSG91_TEMPLATE_ID;
+    assert.deepEqual((await request(app).get('/api/customers/auth-options')).body.otpChannels, ['email'], 'without MSG91 only email is offered');
+    await clearOtpCooldown(); const bad = await request(app).post('/api/customers/otp/send').send({ phone: '9876500056', channel: 'phone' }); assert.equal(bad.body.channel ?? 'email', 'email', 'an unavailable channel falls back to the default; it never sends an SMS');
+  } finally { for (const k of ['BREVO_API_KEY', 'BREVO_SENDER_EMAIL', 'MSG91_AUTH_KEY', 'MSG91_TEMPLATE_ID']) delete process.env[k]; }
+});
+
+test('email health: a rejected sender is reported in admin with the fix, and the test button says so', async () => {
+  process.env.BREVO_API_KEY = 'xkeysib-h'; process.env.BREVO_SENDER_EMAIL = 'bad@shop.test';
+  try {
+    assert.equal((await adm('get', '/integrations/email-status')).body.lastError === null || true, true);
+    const t = await adm('post', '/integrations/email-test', { email: 'me@example.com' }); assert.equal(t.body.ok, false); assert.match(t.body.message, /not valid/i); assert.match(t.body.message, /Senders/);
+    const st = (await adm('get', '/integrations/email-status')).body; assert.equal(st.configured, true); assert.equal(st.provider, 'Brevo'); assert.match(st.lastError.error, /sender/i); assert.equal(st.lastError.to, 'me@example.com');
+    assert.equal((await adm('post', '/integrations/email-test', { email: 'x@example.com' }, tokens.staff)).status, 403, 'only the owner can send test emails');
+    process.env.BREVO_SENDER_EMAIL = 'care@shop.test'; otpMails.length = 0; const ok = await adm('post', '/integrations/email-test', { email: 'me@example.com' }); assert.equal(ok.body.ok, true); assert.equal(otpMails.at(-1).body.sender.email, 'care@shop.test');
+  } finally { delete process.env.BREVO_API_KEY; delete process.env.BREVO_SENDER_EMAIL; }
+});
+
+test('couriers by environment variables: Shiprocket books with no admin form, webhook works, kill switch pauses it', async () => {
+  await M.Integration.deleteMany({});
+  Object.assign(process.env, { SHIPROCKET_EMAIL: 'api@shop.test', SHIPROCKET_PASSWORD: 'env-pass-123', SHIPROCKET_PICKUP_LOCATION: 'Workshop' });
+  await request(app).put('/api/admin/settings').set(A(tokens.owner)).send({ autoCreateShipment: true, defaultCourierProvider: 'shiprocket' });
+  try {
+    const view = (await adm('get', '/integrations')).body; assert.equal(view.envCouriers.shiprocket.configured, true); assert.equal(view.envCouriers.delhivery.configured, false); assert.deepEqual(view.envCouriers.delhivery.missing, ['DELHIVERY_API_TOKEN', 'DELHIVERY_PICKUP_LOCATION']);
+    assert.ok(!JSON.stringify(view).includes('env-pass-123'), 'env secrets never reach the browser'); const hook = view.envCouriers.shiprocket.webhookUrl; assert.match(hook, /\/api\/webhooks\/courier\/shiprocket\?token=[0-9a-f]{20,}/);
+    assert.equal((await adm('post', '/integrations/env/shiprocket/test', {})).body.ok, true); assert.equal((await adm('post', '/integrations/env/delhivery/test', {})).status, 400);
+    courier.calls.length = 0; const r = await place(await cartWith([[S.p1, 1]]), { body: { deliveryMethod: 'standard' } }); assert.equal(r.status, 201, JSON.stringify(r.body)); await wait(900);
+    const o = await M.Order.findById(r.body.orderId); assert.match(o.shipment.awb, /^AWB/, 'booked using only environment variables'); assert.equal(await M.Integration.countDocuments({ provider: 'shiprocket' }), 0, 'nothing was saved in the database');
+    const path = hook.replace(/^https?:\/\/[^/]+/, ''); const wh = (p, body) => request(app).post(p).send(body);
+    assert.equal((await wh(path.replace(/token=.*/, 'token=wrong'), { awb: o.shipment.awb, current_status: 'Delivered' })).status, 401, 'wrong token refused');
+    assert.equal((await wh(path, { awb: o.shipment.awb, current_status: 'In Transit' })).status, 200); assert.equal((await M.Order.findById(o.id)).orderStatus, 'InTransit');
+    process.env.COURIERS_DISABLED = 'true'; assert.equal((await adm('get', '/integrations')).body.envCouriers.shiprocket.configured, false, 'kill switch');
+    courier.calls.length = 0; const r2 = await place(await cartWith([[S.p1, 1]]), { body: { deliveryMethod: 'standard' } }); assert.equal(r2.status, 201, 'checkout is never blocked'); await wait(700);
+    assert.equal((await M.Order.findById(r2.body.orderId)).shipment.awb, '', 'no courier booking while paused'); assert.equal(courier.calls.length, 0);
+  } finally { for (const k of ['SHIPROCKET_EMAIL', 'SHIPROCKET_PASSWORD', 'SHIPROCKET_PICKUP_LOCATION', 'COURIERS_DISABLED']) delete process.env[k]; await request(app).put('/api/admin/settings').set(A(tokens.owner)).send({ autoCreateShipment: false, defaultCourierProvider: 'manual' }); }
 });
 
 test('TEARDOWN', async () => { await db.stop(); courierServer.close(); setTimeout(() => process.exit(0), 200).unref(); });

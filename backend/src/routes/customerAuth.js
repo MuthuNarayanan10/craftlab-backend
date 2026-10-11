@@ -11,7 +11,8 @@ const { verifyFirebaseToken } = require('../utils/firebase');
 const { createOtpService, OtpError } = require('../utils/otpService');
 const { devSender, msg91Sender, brevoSender, zeptomailSender } = require('../utils/otp/senders');
 const { brevoFromEnv } = require('../utils/otp/brevoEnv');
-const { channelOf, SERVER_PROVIDERS } = require('../utils/otpChannel');
+const { channelOf, availableChannels, pickChannel, SERVER_PROVIDERS } = require('../utils/otpChannel');
+const { msg91FromEnv } = require('../utils/otp/msg91Env');
 const { ownedOrdersFilter } = require('../utils/ownership');
 const otpStore = require('../services/otpStore');
 const { buildJourney } = require('../utils/orderStatus');
@@ -28,20 +29,28 @@ function need(test, message) {
   return async (req, res, next) => { const s = await getSettings(); req.settings = s; return test(s) ? next() : res.status(403).json({ error: message }); };
 }
 
-async function buildOtpService(settings) {
+async function buildOtpService(settings, channel) {
   let sender;
-  const notReady = () => new OtpError('NOT_CONFIGURED', 'OTP login is not set up on this store yet', 503);
+  const ch = channel || channelOf(settings);
+  const notReady = () => new OtpError('NOT_CONFIGURED', ch === 'email' ? 'Email codes are not set up on this store yet' : 'Mobile OTP is not set up on this store yet', 503);
   if (settings.otpProvider === 'dev') sender = devSender();
-  else if (settings.otpProvider === 'brevo' && brevoFromEnv()) { const e = brevoFromEnv(); sender = brevoSender({ apiKey: e.apiKey, senderEmail: e.senderEmail, senderName: e.senderName || settings.businessName, baseUrl: process.env.BREVO_BASE_URL || undefined }); }
-  else if (['msg91', 'brevo', 'zeptomail'].includes(settings.otpProvider)) {
-    const i = await Integration.findOne({ provider: settings.otpProvider, enabled: true });
-    if (!i) throw notReady();
-    const sec = i.getSecrets(), c = i.config || {};
-    if (settings.otpProvider === 'msg91') sender = msg91Sender({ authKey: sec.authKey, templateId: c.templateId });
-    else if (settings.otpProvider === 'brevo') sender = brevoSender({ apiKey: sec.apiKey, senderEmail: c.senderEmail, senderName: c.senderName || settings.businessName, baseUrl: process.env.BREVO_BASE_URL || undefined });
-    else sender = zeptomailSender({ sendMailToken: sec.sendMailToken, senderEmail: c.senderEmail, senderName: c.senderName || settings.businessName, region: c.region || 'in', baseUrl: process.env.ZEPTOMAIL_BASE_URL || undefined });
-  } else throw new OtpError('NOT_CONFIGURED', settings.otpProvider === 'firebase' ? 'This store uses Firebase OTP — use the on-screen login' : 'OTP login is not set up on this store', 503);
-  return createOtpService({ store: otpStore, sender, hmacSecret: process.env.OTP_HMAC_SECRET || process.env.JWT_SECRET, channel: channelOf(settings) === 'email' ? 'email' : 'phone' });
+  else if (ch === 'email') {
+    const env = brevoFromEnv();
+    if (env) sender = brevoSender({ apiKey: env.apiKey, senderEmail: env.senderEmail, senderName: env.senderName || settings.businessName, baseUrl: process.env.BREVO_BASE_URL || undefined });
+    else {
+      const prov = ['brevo', 'zeptomail'].includes(settings.otpProvider) ? settings.otpProvider : 'brevo';
+      const i = await Integration.findOne({ provider: prov, enabled: true }); if (!i) throw notReady();
+      const sec = i.getSecrets(), c = i.config || {};
+      sender = prov === 'brevo' ? brevoSender({ apiKey: sec.apiKey, senderEmail: c.senderEmail, senderName: c.senderName || settings.businessName, baseUrl: process.env.BREVO_BASE_URL || undefined })
+        : zeptomailSender({ sendMailToken: sec.sendMailToken, senderEmail: c.senderEmail, senderName: c.senderName || settings.businessName, region: c.region || 'in', baseUrl: process.env.ZEPTOMAIL_BASE_URL || undefined });
+    }
+  } else if (settings.otpProvider === 'firebase') throw new OtpError('NOT_CONFIGURED', 'This store uses Firebase OTP — use the on-screen login', 503);
+  else {
+    const env = msg91FromEnv();
+    if (env) sender = msg91Sender({ authKey: env.authKey, templateId: env.templateId, baseUrl: process.env.MSG91_BASE_URL || undefined });
+    else { const i = await Integration.findOne({ provider: 'msg91', enabled: true }); if (!i) throw notReady(); const sec = i.getSecrets(), c = i.config || {}; sender = msg91Sender({ authKey: sec.authKey, templateId: c.templateId, baseUrl: process.env.MSG91_BASE_URL || undefined }); }
+  }
+  return createOtpService({ store: otpStore, sender, hmacSecret: process.env.OTP_HMAC_SECRET || process.env.JWT_SECRET, channel: ch === 'email' ? 'email' : 'phone' });
 }
 function sendError(res, e) {
   if (e instanceof OtpError) return res.status(e.status).json({ error: e.message, code: e.code, retryAfterSec: e.retryAfterSec });
@@ -51,14 +60,15 @@ function sendError(res, e) {
 /* ---------- what the storefront is allowed to offer ---------- */
 router.get('/auth-options', async (req, res) => {
   const s = await getSettings();
-  res.json({ loginEnabled: s.customerLoginEnabled, signupEnabled: s.customerSignupEnabled, otpEnabled: s.otpEnabled && s.otpProvider !== 'none', otpProvider: s.otpProvider, otpChannel: channelOf(s), guestCheckoutEnabled: s.guestCheckoutEnabled && !s.requireMobileVerification, requireMobileVerification: s.requireMobileVerification });
+  res.json({ loginEnabled: s.customerLoginEnabled, signupEnabled: s.customerSignupEnabled, otpEnabled: s.otpEnabled && s.otpProvider !== 'none', otpProvider: s.otpProvider, otpChannel: channelOf(s), otpChannels: s.otpEnabled && s.otpProvider !== 'none' ? availableChannels(s) : [], guestCheckoutEnabled: s.guestCheckoutEnabled && !s.requireMobileVerification, requireMobileVerification: s.requireMobileVerification });
 });
 
 /* ---------- mobile OTP (server-side codes: provider 'msg91' / 'dev') ---------- */
 router.post('/otp/send', need((s) => s.otpEnabled && SERVER_PROVIDERS.includes(s.otpProvider), 'OTP login is not available right now'), async (req, res) => {
   try {
-    const svc = await buildOtpService(req.settings);
-    const email = channelOf(req.settings) === 'email';
+    const ch = pickChannel(req.settings, req.body.channel);
+    const svc = await buildOtpService(req.settings, ch);
+    const email = ch === 'email';
     const r = await svc.send(email ? req.body.email : req.body.phone, req.ip);
     res.json({ sent: true, phone: r.phone, identifier: r.identifier, channel: email ? 'email' : 'phone', expiresInSec: r.expiresInSec, resendAfterSec: r.resendAfterSec, devCode: r.devCode });
   } catch (e) { if (e instanceof OtpError && e.code === 'SEND_FAILED') logger.error('otp_send_failed', { cause: e.cause }); sendError(res, e); }
@@ -66,8 +76,9 @@ router.post('/otp/send', need((s) => s.otpEnabled && SERVER_PROVIDERS.includes(s
 
 router.post('/otp/verify', (req, res, next) => (termsOk(req, res) ? next() : undefined), need((s) => s.otpEnabled && SERVER_PROVIDERS.includes(s.otpProvider), 'OTP login is not available right now'), async (req, res) => {
   try {
-    const svc = await buildOtpService(req.settings);
-    const email = channelOf(req.settings) === 'email';
+    const ch = pickChannel(req.settings, req.body.channel);
+    const svc = await buildOtpService(req.settings, ch);
+    const email = ch === 'email';
     const { phone: id } = await svc.verify(email ? req.body.email : req.body.phone, req.body.code); // `phone` here is the verified identifier (phone OR email)
     const s = req.settings;
     let customer = await Customer.findOne(email ? { email: id } : { phone: id });

@@ -67,7 +67,10 @@ async function getSettings() {
     catch (e) { doc = await Settings.findOne({ key: 'business' }); } // lost a creation race — unique index guarantees one doc
   }
   // Brevo env vars present and the owner hasn't picked a login method → email OTP is simply on (in memory; nothing to configure)
-  if (doc.otpProvider === 'none' && require('../utils/otp/brevoEnv').brevoFromEnv()) { doc.otpProvider = 'brevo'; doc.otpEnabled = true; }
+  if (doc.otpProvider === 'none') {
+    if (require('../utils/otp/brevoEnv').brevoFromEnv()) { doc.otpProvider = 'brevo'; doc.otpEnabled = true; }
+    else if (require('../utils/otp/msg91Env').msg91FromEnv()) { doc.otpProvider = 'msg91'; doc.otpEnabled = true; }
+  }
   return doc;
 }
 

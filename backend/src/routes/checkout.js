@@ -11,7 +11,7 @@ const { optionalCustomer } = require('../middleware/customerAuth');
 const { finalizeCodOrder, confirmPayment } = require('../services/orderService');
 const { releaseHold } = require('../services/checkoutHold');
 const DeliveryMethod = require('../models/DeliveryMethod');
-const { channelOf } = require('../utils/otpChannel');
+const { channelOf, availableChannels } = require('../utils/otpChannel');
 const { checkPincode } = require('../services/serviceability');
 const reservations = require('../services/reservations');
 const rewards = require('../services/rewards');
@@ -44,9 +44,9 @@ router.post('/', optionalCustomer, async (req, res) => {
   const customerAcct = req.customer || null;
 
   // ---- who may check out (settings are enforced here, not just hidden in the UI) ----
-  const viaEmail = channelOf(settings) === 'email';
-  const contactVerified = !!customerAcct && (viaEmail ? customerAcct.emailVerified : customerAcct.phoneVerified);
-  if (settings.requireMobileVerification && !contactVerified) return res.status(401).json({ error: viaEmail ? 'Please verify your email with a one-time code to continue' : 'Please verify your mobile number with an OTP to continue', code: 'LOGIN_REQUIRED' });
+  const chans = availableChannels(settings), viaEmail = channelOf(settings) === 'email';
+  const contactVerified = !!customerAcct && ((chans.includes('email') && customerAcct.emailVerified) || (chans.includes('phone') && customerAcct.phoneVerified));
+  if (settings.requireMobileVerification && !contactVerified) return res.status(401).json({ error: chans.length > 1 ? 'Please verify your email or mobile number with a one-time code to continue' : viaEmail ? 'Please verify your email with a one-time code to continue' : 'Please verify your mobile number with an OTP to continue', code: 'LOGIN_REQUIRED' });
   if (!settings.guestCheckoutEnabled && !customerAcct) return res.status(401).json({ error: 'Please log in to place an order', code: 'LOGIN_REQUIRED' });
 
   const { cartId, customer, address, couponCode, giftMessage } = req.body;
@@ -65,8 +65,9 @@ router.post('/', optionalCustomer, async (req, res) => {
 
   // a verified account's phone is the order's phone
   // a verified contact is the one the order uses — never what the browser sent
-  const phone = settings.requireMobileVerification && !viaEmail && customerAcct?.phone ? customerAcct.phone : cleanPhone(customer?.phone);
-  if (settings.requireMobileVerification && viaEmail && customerAcct?.email) customer.email = customerAcct.email;
+  const phoneVerifiedAcct = !!customerAcct?.phoneVerified && chans.includes('phone'), emailVerifiedAcct = !!customerAcct?.emailVerified && chans.includes('email');
+  const phone = settings.requireMobileVerification && phoneVerifiedAcct && customerAcct?.phone ? customerAcct.phone : cleanPhone(customer?.phone);
+  if (settings.requireMobileVerification && emailVerifiedAcct && customerAcct?.email) customer.email = customerAcct.email;
   if (!str(customer?.name, 100).trim() || !phone || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(customer?.email || ''))) {
     return res.status(400).json({ error: 'Please enter your name, a valid 10-digit mobile number and email' });
   }

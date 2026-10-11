@@ -5,6 +5,7 @@ const Order = require('../models/Order');
 const Integration = require('../models/Integration');
 const WebhookEvent = require('../models/WebhookEvent');
 const { getCourier } = require('../utils/courier');
+const { courierFromEnv, webhookTokenFor } = require('../utils/courier/env');
 const { applyTrackingUpdate } = require('../utils/trackingUpdate');
 const { afterStatusChange } = require('../services/orderService');
 const { logger } = require('../utils/logger');
@@ -15,7 +16,9 @@ const same = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(Strin
 router.post('/courier/:provider', async (req, res) => {
   const doc = await Integration.findOne({ provider: req.params.provider, enabled: true });
   const token = req.query.token || req.header('x-webhook-token') || '';
-  if (!doc || !doc.webhookToken || !same(token, doc.webhookToken)) return res.status(401).json({ error: 'Unauthorized' });
+  const okDoc = doc && doc.webhookToken && same(token, doc.webhookToken);
+  const okEnv = !okDoc && courierFromEnv(req.params.provider) && same(token, webhookTokenFor(req.params.provider)) && webhookTokenFor(req.params.provider);
+  if (!okDoc && !okEnv) return res.status(401).json({ error: 'Unauthorized' });
 
   const eventId = crypto.createHash('sha256').update(JSON.stringify(req.body)).digest('hex');
   try { await WebhookEvent.create({ provider: req.params.provider, eventId, type: 'tracking' }); } catch (e) { if (e.code === 11000) return res.json({ received: true, duplicate: true }); throw e; }

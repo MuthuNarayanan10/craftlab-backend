@@ -36,3 +36,40 @@ test('journey + messages for MANUAL delivery: our team, no AWB, delivery person 
   const courier = N.buildMessage('order_shipped', { order: { ...base, delivery: { method: { type: 'courier' }, partner: 'Delhivery', trackingId: 'T1' }, shipment: {} } }).text; assert.match(courier, /handed to the courier \(Delhivery\)/);
   assert.equal(buildJourney({ ...base, delivery: {}, orderStatus: 'Packed' }).courier.name, '', 'orders without a method (older orders) still render');
 });
+
+test('Delhivery adapter: creates a waybill from the documented form payload, schedules pickup, tracks, cancels and parses webhooks (fake HTTP)', async () => {
+  const { delhiveryProvider } = require('../src/utils/courier/delhivery'); const calls = [];
+  const fakeFetch = async (url, init = {}) => {
+    calls.push({ url: String(url), method: init.method || 'GET', headers: init.headers, body: init.body }); const u = String(url);
+    const json = (o, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(o) });
+    if (u.includes('/api/cmu/create.json')) return json({ success: true, packages: [{ status: 'Success', waybill: '1234567890123', remarks: [] }] });
+    if (u.includes('/fm/request/new/')) return json({ pickup_id: 77 });
+    if (u.includes('/api/p/packing_slip')) return json({ packages: [{ pdf_download_link: 'https://labels.test/d.pdf' }] });
+    if (u.includes('/api/v1/packages/json/')) return json({ ShipmentData: [{ Shipment: { AWB: '1234567890123', Status: { Status: 'In Transit', StatusLocation: 'Chennai Hub', StatusDateTime: '2026-10-11T09:00:00' }, Scans: [{ ScanDetail: { Scan: 'Manifested', ScannedLocation: 'Workshop', ScanDateTime: '2026-10-10T10:00:00' } }, { ScanDetail: { Scan: 'In Transit', ScannedLocation: 'Chennai Hub', ScanDateTime: '2026-10-11T09:00:00' } }], ExpectedDeliveryDate: '2026-10-14T00:00:00' } }] });
+    if (u.includes('/api/p/edit')) return json({ status: true });
+    if (u.includes('/pin-codes/json/')) return json({ delivery_codes: [{ postal_code: { pin: 600001, cod: 'Y', pre_paid: 'Y' } }] });
+    return json({}, 404);
+  };
+  const d = delhiveryProvider({ fetchImpl: fakeFetch, baseUrl: 'https://stage.test' }); const creds = { apiToken: 'tok-1' }; const cfg = { pickupLocation: 'Workshop', defaultWeightKg: '1.5' };
+  assert.equal((await d.testConnection(creds)).ok, true); assert.equal(calls[0].headers.Authorization, 'Token tok-1');
+  const order = { orderNumber: 'FY2026CL010', createdAt: new Date('2026-10-10'), total: 2499, payment: { method: 'cod' }, customer: { name: 'Asha K', phone: '+91 90000 11111', email: 'a@b.co' }, address: { line1: '12 Anna Salai', line2: '', city: 'Chennai', state: 'Tamil Nadu', pincode: '600002' }, items: [{ name: 'Rack', qty: 1, price: 2499, sku: 'S1' }] };
+  const r = await d.createShipment(creds, order, cfg); assert.equal(r.awb, '1234567890123'); assert.equal(r.courierName, 'Delhivery'); assert.equal(r.labelUrl, 'https://labels.test/d.pdf'); assert.ok(r.pickupScheduledAt instanceof Date);
+  const create = calls.find((c) => c.url.includes('create.json')); const form = new URLSearchParams(create.body); assert.equal(form.get('format'), 'json'); const data = JSON.parse(form.get('data'));
+  assert.equal(data.pickup_location.name, 'Workshop'); assert.equal(data.shipments[0].payment_mode, 'COD'); assert.equal(data.shipments[0].cod_amount, '2499'); assert.equal(data.shipments[0].pin, '600002'); assert.equal(data.shipments[0].weight, '1500'); assert.equal(data.shipments[0].phone, '9000011111');
+  await assert.rejects(() => d.createShipment(creds, order, {}), /pickup location/i);
+  const t = await d.track(creds, '1234567890123'); assert.equal(t.status, 'in_transit'); assert.equal(t.location, 'Chennai Hub'); assert.equal(t.activities.length, 2); assert.equal(t.activities[0].raw, 'In Transit', 'newest first');
+  assert.equal((await d.cancel(creds, '1234567890123')).ok, true); assert.equal(JSON.parse(calls.find((c) => c.url.includes('/api/p/edit')).body).cancellation, 'true');
+  assert.deepEqual((await d.serviceability(creds, { deliveryPin: '600001', cod: true })).serviceable, true);
+  const w = d.parseWebhook({ Shipment: { AWB: '99', Status: { Status: 'Delivered', StatusLocation: 'Chennai', StatusDateTime: '2026-10-12T10:00:00' } } }); assert.equal(w.awb, '99'); assert.equal(w.status, 'delivered');
+  const bad = delhiveryProvider({ fetchImpl: async () => ({ ok: false, status: 401, text: async () => '{}' }) }); await assert.rejects(() => bad.testConnection({ apiToken: 'x' }), /token/i);
+});
+
+test('courier env helper: required variables, kill switch, stable webhook token', () => {
+  const E = require('../src/utils/courier/env');
+  assert.deepEqual(E.envStatus('shiprocket', {}).missing, ['SHIPROCKET_EMAIL', 'SHIPROCKET_PASSWORD', 'SHIPROCKET_PICKUP_LOCATION']);
+  const env = { SHIPROCKET_EMAIL: 'a@b.co', SHIPROCKET_PASSWORD: 'pw', SHIPROCKET_PICKUP_LOCATION: 'Home', JWT_SECRET: 'abc' };
+  assert.equal(E.envStatus('shiprocket', env).configured, true); const c = E.courierFromEnv('shiprocket', env); assert.equal(c.creds.email, 'a@b.co'); assert.equal(c.cfg.pickupLocation, 'Home');
+  assert.equal(E.webhookTokenFor('shiprocket', env), E.webhookTokenFor('shiprocket', env), 'token is stable across restarts'); assert.notEqual(E.webhookTokenFor('shiprocket', env), E.webhookTokenFor('delhivery', env));
+  assert.equal(E.webhookTokenFor('shiprocket', { ...env, SHIPROCKET_WEBHOOK_TOKEN: 'mine' }), 'mine');
+  assert.equal(E.courierFromEnv('shiprocket', { ...env, COURIERS_DISABLED: 'true' }), null); assert.equal(E.courierFromEnv('nope', env), null);
+});

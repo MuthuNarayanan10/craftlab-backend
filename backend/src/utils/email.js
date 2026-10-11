@@ -16,6 +16,9 @@ function ownerRecipients(settings, env = process.env) {
   return raw.split(',').map((x) => x.trim()).filter(Boolean);
 }
 
+let lastError = null; // in-memory (this server instance): shown in Admin → Integrations so a broken sender is never silent
+const noteError = (to, subject, error) => { lastError = { at: new Date().toISOString(), to: [].concat(to).join(', '), subject: String(subject).slice(0, 80), error: String(error).slice(0, 300) }; };
+const getLastEmailError = () => lastError;
 async function sendViaBrevo(cfg, to, subject, html, opts) {
   const recipients = (Array.isArray(to) ? to : [to]).map((email) => ({ email }));
   const body = { sender: { email: cfg.senderEmail, name: cfg.senderName || 'The Craft Lab' }, to: recipients, subject, htmlContent: html };
@@ -25,7 +28,8 @@ async function sendViaBrevo(cfg, to, subject, html, opts) {
     const j = await res.json().catch(() => ({}));
     const hint = res.status === 401 ? ' — the API key is wrong or deleted' : /sender|not.*valid|domain/i.test(String(j.message)) ? ' — the sender address is not verified in Brevo (Senders, Domains & Dedicated IPs → Senders)' : '';
     console.error('Brevo email failed:', res.status, j.message || '');
-    return { error: `Brevo rejected the email: ${j.message || res.status}${hint}` };
+    const msg = `Brevo rejected the email: ${j.message || res.status}${hint}`; noteError(to, subject, msg);
+    return { error: msg };
   }
   return res.json().catch(() => ({ ok: true }));
 }
@@ -34,7 +38,7 @@ async function sendEmail(to, subject, html, opts = {}) {
   const brevo = brevoFromEnv();
   if (brevo) {
     try { return await sendViaBrevo(brevo, to, subject, html, opts); }
-    catch (err) { console.error('Email send error (non-fatal):', err.message); return { error: err.message }; }
+    catch (err) { console.error('Email send error (non-fatal):', err.message); noteError(to, subject, err.message); return { error: err.message }; }
   }
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM;
@@ -142,4 +146,4 @@ function newOrderAlertEmail(order) {
   };
 }
 
-module.exports = { isEmailConfigured, emailProviderName, ownerRecipients, newOrderAlertEmail, quotationRequestEmail, sendEmail, orderConfirmationEmail, orderStatusEmail };
+module.exports = { getLastEmailError, isEmailConfigured, emailProviderName, ownerRecipients, newOrderAlertEmail, quotationRequestEmail, sendEmail, orderConfirmationEmail, orderStatusEmail };

@@ -2,9 +2,10 @@
  *  Nothing else in the order system needs to change. */
 const manual = require('./manual');
 const { shiprocketProvider } = require('./shiprocket');
+const { delhiveryProvider } = require('./delhivery');
 
 // SHIPROCKET_BASE_URL lets staging / sandbox / tests point at a different API host (defaults to Shiprocket production)
-const factories = { manual: () => manual, shiprocket: (opts) => shiprocketProvider(opts || (process.env.SHIPROCKET_BASE_URL ? { baseUrl: process.env.SHIPROCKET_BASE_URL } : undefined)) };
+const factories = { manual: () => manual, delhivery: (opts) => delhiveryProvider(opts || (process.env.DELHIVERY_BASE_URL ? { baseUrl: process.env.DELHIVERY_BASE_URL } : undefined)), shiprocket: (opts) => shiprocketProvider(opts || (process.env.SHIPROCKET_BASE_URL ? { baseUrl: process.env.SHIPROCKET_BASE_URL } : undefined)) };
 const cache = {};
 function getCourier(id, opts) {
   if (!factories[id]) throw new Error(`Unknown courier provider "${id}"`);

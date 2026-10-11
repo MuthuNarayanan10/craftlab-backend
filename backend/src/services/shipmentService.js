@@ -4,6 +4,7 @@ const Order = require('../models/Order');
 const Integration = require('../models/Integration');
 const { getSettings } = require('../models/Settings');
 const { getCourier } = require('../utils/courier');
+const { courierFromEnv } = require('../utils/courier/env');
 const { applyTrackingUpdate } = require('../utils/trackingUpdate');
 const { pushEvent } = require('../utils/orderEvents');
 const { afterStatusChange } = require('./orderService');
@@ -12,6 +13,9 @@ const { audit } = require('../models/AuditLog');
 async function load(providerId) {
   if (!providerId || providerId === 'manual') { const e = new Error('No courier is connected. Connect one under Admin → Integrations, then choose it as the default courier in Settings (or on the delivery method). Until then, enter the tracking number by hand.'); e.status = 400; throw e; }
   const integration = await Integration.findOne({ provider: providerId });
+  if ((!integration || !integration.enabled) && courierFromEnv(providerId)) { // configured with environment variables only — no admin form needed
+    const e = courierFromEnv(providerId); return { adapter: getCourier(providerId), creds: e.creds, cfg: e.cfg, integration: null };
+  }
   if (!integration || !integration.enabled) { const e = new Error(`${providerId} is not enabled. Configure it under Admin → Integrations.`); e.status = 400; throw e; }
   return { adapter: getCourier(providerId), creds: integration.getSecrets(), cfg: integration.config || {}, integration };
 }
@@ -32,7 +36,7 @@ async function createForOrder(orderId, { actor = 'admin', provider, auto = false
     const { adapter, creds, cfg } = await load(providerId);
     // A shipment that exists at the courier but is missing its AWB is COMPLETED, never re-created (that would duplicate the courier order).
     const resume = order.shipment?.shipmentId && order.shipment.status !== 'cancelled' && adapter.completeShipment;
-    const r = resume ? { ...(await adapter.completeShipment(creds, order.shipment.shipmentId)), providerOrderId: order.shipment.providerOrderId } : await adapter.createShipment(creds, order, cfg);
+    const r = resume ? { ...(await adapter.completeShipment(creds, order.shipment.shipmentId, { cfg })), providerOrderId: order.shipment.providerOrderId } : await adapter.createShipment(creds, order, cfg);
     order.shipment = { ...(order.shipment?.toObject?.() || {}), provider: providerId, providerOrderId: r.providerOrderId, shipmentId: r.shipmentId, awb: r.awb, courierName: r.courierName, labelUrl: r.labelUrl, trackingUrl: r.trackingUrl, pickupScheduledAt: r.pickupScheduledAt, status: r.awb ? 'pickup_scheduled' : 'created', error: r.warnings.join(' · '), attempts: (order.shipment?.attempts || 0) + 1, lastSyncAt: new Date() };
     if (r.awb) { order.delivery.partner = r.courierName || order.delivery.partner; order.delivery.trackingId = r.awb; }
     pushEvent(order, { label: 'Shipment created', actor, public: false, type: 'shipment', note: `${r.courierName || providerId} ${r.awb ? '· AWB ' + r.awb : ''}` });

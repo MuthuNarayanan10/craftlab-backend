@@ -52,7 +52,7 @@ test('courier status normaliser', () => {
 });
 test('courier registry: manual always available; unknown rejected; new couriers plug in', () => {
   assert.equal(getCourier('manual').supportsApi, false); assert.throws(() => getCourier('nope'), /Unknown courier/);
-  assert.deepEqual(listCouriers().map((c) => c.id), ['manual', 'shiprocket']);
+  assert.deepEqual(listCouriers().map((c) => c.id).sort(), ['manual', 'delhivery', 'shiprocket'].sort());
 });
 
 function mockShiprocket(behaviour = {}) {
