@@ -24,7 +24,7 @@ function normalizeEmail(input) {
 
 function createOtpService({ store, sender, hmacSecret, channel = 'phone', now = () => Date.now(), config = {}, isProduction = process.env.NODE_ENV === 'production' }) {
   if (!hmacSecret) throw new Error('OTP service needs an HMAC secret');
-  const cfg = { ttlMs: 5 * 60e3, resendCooldownMs: 30e3, maxSendsPerPhoneHour: 5, maxSendsPerIpHour: 20, maxAttempts: 5, length: 6, ...config };
+  const cfg = { ttlMs: 5 * 60e3, resendCooldownMs: 30e3, maxSendsPerPhoneHour: 4, maxSendsPerIpHour: 20, maxAttempts: 5, length: 6, ...config };
   const norm = channel === 'email' ? normalizeEmail : normalizePhone;
   const what = channel === 'email' ? 'email address' : 'mobile number';
   const hash = (phone, code) => crypto.createHmac('sha256', hmacSecret).update(`${phone}:${code}`).digest('hex');
@@ -40,34 +40,36 @@ function createOtpService({ store, sender, hmacSecret, channel = 'phone', now = 
       throw new OtpError('COOLDOWN', `Please wait ${retryAfterSec}s before requesting another code`, 429, { retryAfterSec });
     }
     const since = new Date(t - 3600e3);
-    if ((await store.countRecent({ phone, since })) >= cfg.maxSendsPerPhoneHour) throw new OtpError('TOO_MANY_PHONE', `Too many codes requested for this ${what}. Please try again in an hour.`, 429);
+    if ((await store.countRecent({ phone, since })) >= cfg.maxSendsPerPhoneHour) throw new OtpError('TOO_MANY_PHONE', `You’ve used all 3 resends for this ${what}. Try again in an hour, or continue as a guest and track your order with its order number.`, 429);
     if (ip && (await store.countRecent({ ip, since })) >= cfg.maxSendsPerIpHour) throw new OtpError('TOO_MANY_IP', 'Too many requests from this network. Please try again later.', 429);
 
     const code = String(crypto.randomInt(0, 10 ** cfg.length)).padStart(cfg.length, '0');
-    await store.invalidate(phone); // earlier codes stop working the moment a new one is issued
+    // earlier codes stay valid until they expire, so a slow email/SMS that lands after a resend still works
     const rec = await store.create({ phone, codeHash: hash(phone, code), expiresAt: new Date(t + cfg.ttlMs), attempts: 0, ip: ip || '', createdAt: new Date(t) });
     try { await sender.send(phone, code); }
     catch (e) { await store.consume(rec.id); throw new OtpError('SEND_FAILED', 'We couldn’t send the OTP right now. Please try again shortly.', 502, { cause: e.message }); }
 
-    return { phone, identifier: phone, expiresInSec: Math.round(cfg.ttlMs / 1000), resendAfterSec: Math.round(cfg.resendCooldownMs / 1000), devCode: sender.id === 'dev' && !isProduction ? code : undefined };
+    return { phone, identifier: phone, expiresInSec: Math.round(cfg.ttlMs / 1000), resendAfterSec: Math.round(cfg.resendCooldownMs / 1000), resendsLeft: Math.max(0, cfg.maxSendsPerPhoneHour - (await store.countRecent({ phone, since }))), devCode: sender.id === 'dev' && !isProduction ? code : undefined };
   }
 
   async function verify(rawPhone, rawCode) {
     const phone = norm(rawPhone);
     const code = String(rawCode || '').trim();
     if (!phone || !/^\d{4,8}$/.test(code)) throw new OtpError('INVALID_INPUT', 'Enter the code we sent you');
-    const rec = await store.latestActive(phone);
-    if (!rec) throw new OtpError('NO_OTP', 'That code has expired or was already used. Please request a new one.');
-    if (new Date(rec.expiresAt).getTime() < now()) throw new OtpError('EXPIRED', 'That code has expired. Please request a new one.');
+    const list = store.listActive ? await store.listActive(phone) : [await store.latestActive(phone)];
+    const live = list.filter((r) => r && new Date(r.expiresAt).getTime() >= now());
+    if (!live.length) throw new OtpError(list.some(Boolean) ? 'EXPIRED' : 'NO_OTP', list.some(Boolean) ? 'That code has expired. Please request a new one.' : 'That code has expired or was already used. Please request a new one.');
+    const rec = live[0]; // newest code carries the wrong-attempt counter
     if (rec.attempts >= cfg.maxAttempts) throw new OtpError('LOCKED', 'Too many wrong attempts. Please request a new code.', 429);
 
     const attempts = await store.incrementAttempts(rec.id);
-    const a = Buffer.from(hash(phone, code)), b = Buffer.from(rec.codeHash);
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    const a = Buffer.from(hash(phone, code));
+    const match = live.find((r) => { const b = Buffer.from(r.codeHash); return a.length === b.length && crypto.timingSafeEqual(a, b); });
+    if (!match) {
       const left = Math.max(0, cfg.maxAttempts - attempts);
       throw new OtpError('INVALID', left ? `Incorrect code. ${left} attempt${left === 1 ? '' : 's'} left.` : 'Too many wrong attempts. Please request a new code.', 400, { attemptsLeft: left });
     }
-    await store.consume(rec.id);
+    for (const r of live) await store.consume(r.id);
     return { phone };
   }
   return { send, verify, normalizePhone, normalizeEmail, config: cfg };

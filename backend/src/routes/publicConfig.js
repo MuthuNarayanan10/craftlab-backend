@@ -13,7 +13,7 @@ router.get('/public', async (req, res) => {
     codEnabled: s.codEnabled, codFee: s.codFee, prepaidDiscountPercent: s.prepaidDiscountPercent,
     auth: { loginEnabled: s.customerLoginEnabled, signupEnabled: s.customerSignupEnabled, otpEnabled: s.otpEnabled && s.otpProvider !== 'none', otpProvider: s.otpProvider, otpChannel: channelOf(s), otpChannels: s.otpEnabled && s.otpProvider !== 'none' ? availableChannels(s) : [], guestCheckoutEnabled: s.guestCheckoutEnabled && !s.requireMobileVerification, requireMobileVerification: s.requireMobileVerification },
     // printed on customer-visible invoices
-    business: { legalName: s.legalName || s.businessName, gstin: s.gstin, pan: s.pan, address: s.address, city: s.city, state: s.state, pincode: s.pincode, phone: s.phone, email: s.email },
+    business: { hsn: s.hsnCode || '', legalName: s.legalName || s.businessName, gstin: s.gstin, pan: s.pan, address: s.address, city: s.city, state: s.state, pincode: s.pincode, phone: s.phone, email: s.email },
   });
 });
 module.exports = router;

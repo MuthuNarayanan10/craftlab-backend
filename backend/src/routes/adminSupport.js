@@ -39,7 +39,7 @@ router.post('/:id/reply', async (req, res) => {
   let emailed = false;
   if (!internal && t.email) {
     const s = await getSettings();
-    const r = await sendEmail(t.email, `Re: ${t.subject} [${t.ticketNumber}]`, `<div style="font-family:sans-serif;max-width:560px;color:#2A2620"><p>Hi ${esc(t.name.split(' ')[0])},</p><p style="white-space:pre-wrap">${esc(text)}</p><hr style="border:none;border-top:1px solid #eee"><p style="color:#6B6255;font-size:13px">Reference ${esc(t.ticketNumber)} · reply to this email or write to ${esc(s.email || 'care@thecraftlab.co.in')} · ${esc(s.supportHours)}</p></div>`).catch(() => ({ error: 'failed' }));
+    const r = await sendEmail(t.email, `Re: ${t.subject} [${t.ticketNumber}]`, `<div style="font-family:sans-serif;max-width:560px;color:#2A2620"><p>Hi ${esc(t.name.split(' ')[0])},</p><p style="white-space:pre-wrap">${esc(text)}</p><hr style="border:none;border-top:1px solid #eee"><p style="color:#6B6255;font-size:13px">Reference ${esc(t.ticketNumber)} · reply to this email or write to ${esc(s.email || 'care@thecraftlab.co.in')} · ${esc(s.supportHours)}</p></div>`, s.email ? { replyTo: s.email } : {}).catch(() => ({ error: 'failed' }));
     emailed = !(r && (r.skipped || r.error));
   }
   await audit({ action: internal ? 'support.note' : 'support.replied', actor: req.admin.email, entity: 'support_ticket', entityId: t.id, summary: `${internal ? 'Internal note on' : 'Replied to'} ${t.ticketNumber}`, req });

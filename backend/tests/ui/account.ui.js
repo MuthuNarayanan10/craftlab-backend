@@ -17,11 +17,11 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|gstatic\.com\/firebasejs|api\.qr
     const ctx = await browser.newContext({ viewport: vp, deviceScaleFactor: vp.width < 500 ? 2 : 1, permissions: ['clipboard-read', 'clipboard-write'] }); await ctx.route(BLOCK, (r) => r.abort());
     const page = await ctx.newPage(); page.on('pageerror', (e) => errs.push(e.message)); page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|ERR_/.test(m.text())) errs.push(m.text()); }); return { ctx, page };
   }
-  const track = async (page, o, contact) => { await page.goto(`${B}/order-tracking.html?order=${o.orderNumber}`); await page.fill('#fContact', contact); await page.click('#lookup button'); await page.waitForSelector('.trk-hero', { timeout: 8000 }); await page.waitForTimeout(1500); };
+  const track = async (page, o, contact) => { await page.goto(`${B}/order-tracking.html?order=${o.orderNumber}`); await page.fill('#fContact', contact); await page.click('#lookup button[type=submit]'); await page.waitForSelector('.trk-hero', { timeout: 8000 }); await page.waitForTimeout(1500); };
 
   /* ================= TRACKING ================= */
   let { ctx, page } = await newPage();
-  await page.goto(`${B}/order-tracking.html`); await page.fill('#fOrderNumber', manualOut.orderNumber); await page.fill('#fContact', 'wrong@example.com'); await page.click('#lookup button'); await page.waitForSelector('#trackError:not(:empty)');
+  await page.goto(`${B}/order-tracking.html`); await page.fill('#fOrderNumber', manualOut.orderNumber); await page.fill('#fContact', 'wrong@example.com'); await page.click('#lookup button[type=submit]'); await page.waitForSelector('#trackError:not(:empty)');
   ok('wrong email reveals nothing', /No order found/.test(await page.locator('#trackError').textContent()));
   await track(page, manualOut, '9876543210');   // by mobile number
   ok('MANUAL delivery: headline answers "where is my order"', /Out for delivery today/.test(await page.locator('.trk-hero h2').textContent()));
@@ -45,7 +45,7 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|gstatic\.com\/firebasejs|api\.qr
 
   /* ================= ACCOUNT ================= */
   ({ ctx, page } = await newPage());
-  await page.goto(`${B}/account.html`); await page.waitForSelector('#otpLoginBtn'); await page.screenshot({ path: SHOTS + '/13-account-login.png' });
+  await page.goto(`${B}/account.html?nologin`); await page.waitForSelector('#otpLoginBtn'); await page.screenshot({ path: SHOTS + '/13-account-login.png' });
   ok('logged-out page offers OTP first, then email login + sign-up', await page.locator('#loginForm').count() === 1 && await page.locator('#signupForm').count() === 1);
   await page.click('#otpLoginBtn'); await page.fill('#clOtpPhoneInput', '9876543210'); await page.check('#clOtpTerms'); await page.click('#clOtpSendBtn'); await page.waitForSelector('#clOtpStepCode', { state: 'visible' });
   const code = ((await page.locator('#clOtpDevHint').textContent()).match(/\d{6}/) || [])[0]; await page.fill('#clOtpCodeInput', code); await page.waitForSelector('[data-tab=orders]', { timeout: 8000 }); ok('login lands on My Details with account information', /Account information/.test(await page.locator('#tabBody').textContent()) && /Terms accepted/.test(await page.locator('#tabBody').textContent())); await page.click('[data-tab=orders]'); await page.waitForSelector('.order-card', { timeout: 8000 });
@@ -55,8 +55,8 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|gstatic\.com\/firebasejs|api\.qr
   await page.screenshot({ path: SHOTS + '/14-account-orders.png', fullPage: true });
   // invoice
   await page.evaluate(() => { window.__printed = null; const orig = HTMLIFrameElement.prototype; const add = document.body.appendChild.bind(document.body); document.body.appendChild = function (n) { const r = add(n); if (n.tagName === 'IFRAME') setTimeout(() => { try { n.contentWindow.print = () => { window.__printed = n.contentDocument.body.innerHTML; }; } catch (e) {} }, 0); return r; }; });
-  const dCard = page.locator('.order-card', { hasText: delivered.orderNumber }); await dCard.locator('[data-invoice]').click(); await page.waitForFunction(() => window.__printed, null, { timeout: 8000 });
-  const inv = await page.evaluate(() => window.__printed); ok('customer can print a GST invoice (business GSTIN, CGST+SGST for same-state, delivery line)', /TAX INVOICE/.test(inv) && /33ABCDE1234F1Z5/.test(inv) && /CGST @ 9%/.test(inv) && /SGST @ 9%/.test(inv) && /Delivery \(Standard delivery\)/.test(inv) && /INV-\d+/.test(inv));
+  const dCard = page.locator('.order-card', { hasText: delivered.orderNumber }); await dCard.locator('[data-invoice]:not([data-pdf])').click(); await page.waitForSelector('#clDocModal iframe', { timeout: 8000 }); await page.waitForTimeout(600);
+  const inv = await page.evaluate(() => document.querySelector('#clDocModal iframe').srcdoc); await page.keyboard.press('Escape'); ok('customer can print a GST invoice (business GSTIN, CGST+SGST for same-state, delivery line)', /TAX INVOICE/.test(inv) && /33ABCDE1234F1Z5/.test(inv) && /CGST @ 9%/.test(inv) && /SGST @ 9%/.test(inv) && /Delivery \(Standard delivery\)/.test(inv) && /INV-\d+/.test(inv));
   // return flow
   await dCard.locator('[data-return]').click(); await page.waitForSelector('#rtModal.open'); await page.waitForTimeout(300);
   ok('return modal: items with quantity picker, reasons, window deadline', await page.locator('#rtLines [data-line]').count() === 1 && await page.locator('#rtLines select option').count() === 2 && (await page.locator('#rtReason option').count()) === 7 && /until/.test(await page.locator('#rtWindow').textContent()));
@@ -79,10 +79,10 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|gstatic\.com\/firebasejs|api\.qr
 
   /* ================= admin switches change the account page ================= */
   await api('/admin/settings', { method: 'PUT', body: { customerLoginEnabled: false, customerSignupEnabled: false } }, owner);
-  ({ ctx, page } = await newPage()); await page.goto(`${B}/account.html`); await page.waitForSelector('.empty-state');
-  ok('login + sign-up switched off → account page explains and points to order tracking', /aren.t available/.test(await page.locator('.empty-state').textContent()) && await page.locator('#loginForm, #signupForm, #otpLoginBtn').count() === 0); await ctx.close();
+  ({ ctx, page } = await newPage()); await page.goto(`${B}/account.html?nologin`); await page.waitForSelector('.empty-state');
+  ok('login + sign-up switched off → account page explains and points to order tracking', /Shop without an account/.test(await page.locator('.empty-state').textContent()) && await page.locator('#loginForm, #signupForm, #otpLoginBtn').count() === 0); await ctx.close();
   await api('/admin/settings', { method: 'PUT', body: { customerLoginEnabled: true, customerSignupEnabled: false } }, owner);
-  ({ ctx, page } = await newPage()); await page.goto(`${B}/account.html`); await page.waitForSelector('#loginForm'); ok('sign-up off, login on → only the login form (plus OTP)', await page.locator('#signupForm').count() === 0 && await page.locator('#otpLoginBtn').count() === 1); await ctx.close();
+  ({ ctx, page } = await newPage()); await page.goto(`${B}/account.html?nologin`); await page.waitForSelector('#loginForm'); ok('sign-up off, login on → only the login form (plus OTP)', await page.locator('#signupForm').count() === 0 && await page.locator('#otpLoginBtn').count() === 1); await ctx.close();
   await api('/admin/settings', { method: 'PUT', body: { customerSignupEnabled: true } }, owner);
 
   console.log('\nJS errors:', errs.length ? errs.join(' | ') : 'none'); console.log(`${pass}/${pass + fail} passed`); await browser.close(); process.exit(fail ? 1 : 0);

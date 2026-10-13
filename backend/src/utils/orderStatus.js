@@ -96,7 +96,7 @@ function buildJourney(order) {
     estimatedDelivery: order.estimatedDelivery || null,
     deliveryWindowText: order.estimatedDelivery ? null : ['Dispatched', 'InTransit', 'OutForDelivery'].includes(status) ? null : (terminalBad || delivered ? null : `${etaWindow} after dispatch`),
     deliveryMethod: { key: meth.key || '', name: meth.name || '', type: meth.type || '', fee: meth.fee || 0 },
-    courier: { name: partner, awb, trackingUrl: manual ? '' : ship.trackingUrl || '' },
+    courier: { name: partner, awb, trackingUrl: manual ? '' : ship.trackingUrl || dlv.trackingUrl || '', manualEntry: !manual && !ship.awb && !!dlv.trackingId },
     assignee: manual && dlv.assignee?.name ? { name: dlv.assignee.name, phone: ['Dispatched', 'InTransit', 'OutForDelivery'].includes(status) ? dlv.assignee.phone || '' : '' } : null,
     scheduledFor: manual ? dlv.scheduledFor || null : null,
     lastLocation: last ? { text: last.location, at: last.at } : null,

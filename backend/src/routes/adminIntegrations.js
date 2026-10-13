@@ -49,6 +49,11 @@ router.post('/env/:provider/test', requireRole('ADMIN'), async (req, res) => {
 });
 
 // Email health: provider in use, the last failure (kept in memory), and a one-click test mail
+// GET /api/admin/integrations/inbound-mail — how customer e-mail replies reach the Support tickets page (owner only: the URL carries a secret)
+router.get('/inbound-mail', requireRole('ADMIN'), (req, res) => res.json({
+  imapConfigured: require('../services/imapPoll').configured(), imapHost: process.env.IMAP_HOST || '', imapUser: process.env.IMAP_USER || '',
+  webhookPath: `/api/webhooks/inbound-mail?token=${require('../routes/inboundMail').inboundToken()}`,
+}));
 router.get('/email-status', (req, res) => res.json({ configured: isEmailConfigured(), provider: emailProviderName(), senderEmail: (brevoFromEnv() || {}).senderEmail || '', missing: [!process.env.BREVO_API_KEY && 'BREVO_API_KEY', !process.env.BREVO_SENDER_EMAIL && 'BREVO_SENDER_EMAIL'].filter(Boolean), lastError: getLastEmailError() }));
 router.post('/email-test', requireRole('ADMIN'), async (req, res) => {
   const to = String(req.body.email || '').trim().toLowerCase();

@@ -17,6 +17,7 @@ const KEY_SECRET = 'ui_key_secret';
   const outer = express();
   outer.get('/__sign', (req, res) => res.json({ sig: crypto.createHmac('sha256', KEY_SECRET).update(`${req.query.o}|${req.query.p}`).digest('hex') })); // lets the browser test fake a Razorpay success
   outer.get('/__reset-otp', async (req, res) => { await require('../../src/models/OtpRequest').collection.updateMany({}, { $set: { createdAt: new Date(Date.now() - 600e3) } }); res.json({ ok: true }); }); // test-only: skip the resend cool-down
+  outer.get('/__age-delivery', async (req, res) => { await require('../../src/models/Order').collection.updateMany({ orderStatus: 'Delivered' }, { $set: { deliveredAt: new Date(Date.now() - 30 * 86400e3) } }); res.json({ ok: true }); }); // test-only: pretend delivery was 30 days ago
   outer.use(express.static(path.join(__dirname, '../../../frontend')));
   outer.use(createApp());
   const server = await new Promise((res, rej) => { const sv = outer.listen(process.env.PORT || 4000, () => res(sv)); sv.on('error', rej); });

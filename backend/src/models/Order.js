@@ -97,7 +97,7 @@ const orderSchema = new mongoose.Schema({
     method: { key: { type: String, default: '' }, name: { type: String, default: '' }, type: { type: String, default: '' }, fee: { type: Number, default: 0 }, etaMinDays: { type: Number, default: 0 }, etaMaxDays: { type: Number, default: 0 }, courierProvider: { type: String, default: '' } },
     assignee: { name: { type: String, default: '' }, phone: { type: String, default: '' } },   // manual delivery: who is delivering
     scheduledFor: { type: Date, default: null },                                                // manual delivery: planned delivery time
-    partner: { type: String, default: '' }, trackingId: { type: String, default: '' },
+    partner: { type: String, default: '' }, trackingId: { type: String, default: '' }, trackingUrl: { type: String, default: '' },
     dispatchDate: { type: Date, default: null }, expectedDelivery: { type: Date, default: null }, notes: { type: String, default: '' },
   },
   shipment: { // courier-API shipment (optional)

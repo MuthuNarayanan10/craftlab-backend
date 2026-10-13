@@ -25,7 +25,12 @@ async function captureGuest({ name, phone, email }) {
       if (Object.keys(set).length) await Customer.updateOne({ _id: c._id }, { $set: set }).catch(() => {});
       return c;
     }
-    return await Customer.create({ name: String(name || 'Guest').trim() || 'Guest', ...(ph ? { phone: ph } : {}), ...(em ? { email: em } : {}), isGuest: true, authMethod: 'otp' });
+    const base = { name: String(name || 'Guest').trim() || 'Guest', isGuest: true, authMethod: 'otp' };
+    try { return await Customer.create({ ...base, ...(ph ? { phone: ph } : {}), ...(em ? { email: em } : {}) }); }
+    catch (e) { // one of the two is already on another record: keep whichever is free so the buyer is still listed
+      if (e.code !== 11000) throw e;
+      try { return await Customer.create({ ...base, ...(ph && !(await Customer.exists({ phone: ph })) ? { phone: ph } : {}), ...(em && !(await Customer.exists({ email: em })) ? { email: em } : {}) }); } catch (e2) { throw e2; }
+    }
   } catch (e) { logger.warn('guest_capture_failed', { error: e.message }); return null; }
 }
 module.exports = { captureGuest };

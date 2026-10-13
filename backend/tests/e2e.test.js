@@ -36,7 +36,7 @@ const hook = (event, payload, id) => { const body = JSON.stringify({ event, payl
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const mongoose = require('mongoose');
 const ageOrder = (id, minutes) => M.Order.collection.updateOne({ _id: new mongoose.Types.ObjectId(String(id)) }, { $set: { createdAt: new Date(Date.now() - minutes * 60e3) } });
-const clearOtpCooldown = () => require('../src/models/OtpRequest').collection.updateMany({}, { $set: { createdAt: new Date(Date.now() - 600e3) } });
+const clearOtpCooldown = () => require('../src/models/OtpRequest').collection.updateMany({}, { $set: { createdAt: new Date(Date.now() - 2 * 3600e3) } });
 const addr = { line1: '12 Test Street', city: 'Chennai', state: 'Tamil Nadu', pincode: '600001' };
 async function cartWith(items) { const c = (await request(app).post('/api/cart')).body.cartId; for (const [p, q] of items) await request(app).post(`/api/cart/${c}/items`).send({ productId: p.id, qty: q }); return c; }
 const place = (cartId, extra = {}) => request(app).post('/api/checkout').set(extra.auth ? { Authorization: 'Bearer ' + extra.auth } : {}).send({ cartId, paymentMethod: 'cod', customer: { name: 'Asha K', phone: '9876543210', email: 'asha@example.com' }, address: addr, ...extra.body });

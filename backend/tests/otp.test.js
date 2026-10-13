@@ -10,6 +10,7 @@ function memStore() {
     rows,
     latest: async (phone) => rows.filter((r) => r.phone === phone).sort((a, b) => b.createdAt - a.createdAt)[0] || null,
     latestActive: async (phone) => rows.filter((r) => r.phone === phone && !r.consumed).sort((a, b) => b.createdAt - a.createdAt)[0] || null,
+    listActive: async (phone) => rows.filter((r) => r.phone === phone && !r.consumed).sort((a, b) => b.createdAt - a.createdAt),
     countRecent: async ({ phone, ip, since }) => rows.filter((r) => (phone ? r.phone === phone : r.ip === ip) && r.createdAt >= since).length,
     create: async (d) => { const r = { id: ++n, consumed: false, ...d }; rows.push(r); return r; },
     incrementAttempts: async (id) => ++rows.find((r) => r.id === id).attempts,
@@ -50,16 +51,16 @@ test('expiry', async () => {
   const { svc, sent, advance } = make(); await svc.send('9876543210'); advance(5 * 60e3 + 1);
   await assert.rejects(svc.verify('9876543210', sent[0].c), (e) => e.code === 'EXPIRED');
 });
-test('resend cool-down, then new code invalidates the old one', async () => {
+test('resend cool-down; an earlier code still works after a resend (slow email)', async () => {
   const { svc, sent, advance } = make(); await svc.send('9876543210');
   await assert.rejects(svc.send('9876543210'), (e) => e.code === 'COOLDOWN' && e.status === 429 && e.retryAfterSec > 0);
   advance(31e3); await svc.send('9876543210');
-  await assert.rejects(svc.verify('9876543210', sent[0].c), (e) => ['INVALID', 'NO_OTP'].includes(e.code), 'first code no longer works');
-  assert.ok((await svc.verify('9876543210', sent[1].c)).phone);
+  assert.ok((await svc.verify('9876543210', sent[0].c)).phone, 'the first code is still accepted');
+  await assert.rejects(svc.verify('9876543210', sent[1].c), (e) => e.code === 'NO_OTP', 'and using one retires the rest');
 });
 test('hourly caps per phone and per IP', async () => {
   const a = make({ config: { resendCooldownMs: 0 } });
-  for (let i = 0; i < 5; i++) await a.svc.send('9876543210', '9.9.9.9');
+  let last; for (let i = 0; i < 4; i++) last = await a.svc.send('9876543210', '9.9.9.9'); assert.equal(last.resendsLeft, 0, 'first send + 3 resends');
   await assert.rejects(a.svc.send('9876543210', '9.9.9.9'), (e) => e.code === 'TOO_MANY_PHONE');
   const b = make({ config: { resendCooldownMs: 0, maxSendsPerIpHour: 3 } });
   for (let i = 0; i < 3; i++) await b.svc.send(`98765432${10 + i}`, '2.2.2.2');
@@ -93,7 +94,7 @@ test('email OTP: normalisation, send/verify by email, same safety limits, generi
   await assert.rejects(svc.send('asha@example.com'), (e) => e.code === 'COOLDOWN');
   await assert.rejects(svc.verify('asha@example.com', sent[0].c === '000000' ? '111111' : '000000'), (e) => e.code === 'INVALID');
   assert.deepEqual(await svc.verify('ASHA@example.com', sent[0].c), { phone: 'asha@example.com' }, 'case-insensitive email, single use'); await assert.rejects(svc.verify('asha@example.com', sent[0].c), (e) => e.code === 'NO_OTP');
-  const cap = make({ channel: 'email', config: { resendCooldownMs: 0 } }); for (let i = 0; i < 5; i++) await cap.svc.send('x@y.com', '2.2.2.2'); await assert.rejects(cap.svc.send('x@y.com', '2.2.2.2'), (e) => e.code === 'TOO_MANY_PHONE' && /email address/.test(e.message));
+  const cap = make({ channel: 'email', config: { resendCooldownMs: 0 } }); for (let i = 0; i < 4; i++) await cap.svc.send('x@y.com', '2.2.2.2'); await assert.rejects(cap.svc.send('x@y.com', '2.2.2.2'), (e) => e.code === 'TOO_MANY_PHONE' && /email address/.test(e.message));
 });
 test('which channel a provider uses', () => {
   assert.equal(channelOf({ otpProvider: 'brevo' }), 'email'); assert.equal(channelOf({ otpProvider: 'zeptomail' }), 'email'); assert.equal(channelOf({ otpProvider: 'msg91' }), 'phone'); assert.equal(channelOf({ otpProvider: 'firebase' }), 'phone');

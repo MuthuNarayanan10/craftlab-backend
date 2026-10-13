@@ -64,17 +64,17 @@ router.get('/auth-options', async (req, res) => {
 });
 
 /* ---------- mobile OTP (server-side codes: provider 'msg91' / 'dev') ---------- */
-router.post('/otp/send', need((s) => s.otpEnabled && SERVER_PROVIDERS.includes(s.otpProvider), 'OTP login is not available right now'), async (req, res) => {
+router.post('/otp/send', need((s) => s.otpEnabled && SERVER_PROVIDERS.includes(s.otpProvider), 'Quick login is taking a short break — you can continue as a guest.'), async (req, res) => {
   try {
     const ch = pickChannel(req.settings, req.body.channel);
     const svc = await buildOtpService(req.settings, ch);
     const email = ch === 'email';
     const r = await svc.send(email ? req.body.email : req.body.phone, req.ip);
-    res.json({ sent: true, phone: r.phone, identifier: r.identifier, channel: email ? 'email' : 'phone', expiresInSec: r.expiresInSec, resendAfterSec: r.resendAfterSec, devCode: r.devCode });
+    res.json({ sent: true, phone: r.phone, identifier: r.identifier, channel: email ? 'email' : 'phone', expiresInSec: r.expiresInSec, resendAfterSec: r.resendAfterSec, resendsLeft: r.resendsLeft, devCode: r.devCode });
   } catch (e) { if (e instanceof OtpError && e.code === 'SEND_FAILED') logger.error('otp_send_failed', { cause: e.cause }); sendError(res, e); }
 });
 
-router.post('/otp/verify', (req, res, next) => (termsOk(req, res) ? next() : undefined), need((s) => s.otpEnabled && SERVER_PROVIDERS.includes(s.otpProvider), 'OTP login is not available right now'), async (req, res) => {
+router.post('/otp/verify', (req, res, next) => (termsOk(req, res) ? next() : undefined), need((s) => s.otpEnabled && SERVER_PROVIDERS.includes(s.otpProvider), 'Quick login is taking a short break — you can continue as a guest.'), async (req, res) => {
   try {
     const ch = pickChannel(req.settings, req.body.channel);
     const svc = await buildOtpService(req.settings, ch);
@@ -84,13 +84,13 @@ router.post('/otp/verify', (req, res, next) => (termsOk(req, res) ? next() : und
     let customer = await Customer.findOne(email ? { email: id } : { phone: id });
     let isNew = false;
     if (!customer) {
-      if (!((s.customerSignupEnabled && s.autoCreateAccounts) || s.requireMobileVerification)) return res.status(403).json({ error: 'New accounts are not being created right now' });
+      if (!((s.customerSignupEnabled && s.autoCreateAccounts) || s.requireMobileVerification)) return res.status(403).json({ error: 'We’re not opening new accounts at the moment — you can continue as a guest.' });
       customer = await Customer.create({ name: String(req.body.name || '').trim() || 'Craft Lab Customer', ...(email ? { email: id, emailVerified: true } : { phone: id, phoneVerified: true }), authMethod: 'otp' });
       isNew = true;
       await audit({ action: 'customer.created', actor: 'customer', entity: 'customer', entityId: customer.id, summary: `New customer via OTP ${id}`, req });
     } else {
       if (customer.status === 'blocked') return res.status(403).json({ error: 'This account has been blocked. Contact care@thecraftlab.co.in.' });
-      if (!(s.customerLoginEnabled || s.requireMobileVerification)) return res.status(403).json({ error: 'Customer login is currently disabled' });
+      if (!(s.customerLoginEnabled || s.requireMobileVerification)) return res.status(403).json({ error: 'Logins are paused for now — you can continue as a guest.' });
       if (email) customer.emailVerified = true; else customer.phoneVerified = true;
       customer.isGuest = false;
     }
@@ -109,11 +109,11 @@ router.post('/otp-login', (req, res, next) => (termsOk(req, res) ? next() : unde
   const s = req.settings;
   let customer = await Customer.findOne({ phone }); let isNew = false;
   if (!customer) {
-    if (!((s.customerSignupEnabled && s.autoCreateAccounts) || s.requireMobileVerification)) return res.status(403).json({ error: 'New accounts are not being created right now' });
+    if (!((s.customerSignupEnabled && s.autoCreateAccounts) || s.requireMobileVerification)) return res.status(403).json({ error: 'We’re not opening new accounts at the moment — you can continue as a guest.' });
     customer = await Customer.create({ name: name || 'Craft Lab Customer', phone, firebaseUid: decoded.uid, authMethod: 'otp', phoneVerified: true }); isNew = true;
   } else {
     if (customer.status === 'blocked') return res.status(403).json({ error: 'This account has been blocked.' });
-    if (!(s.customerLoginEnabled || s.requireMobileVerification)) return res.status(403).json({ error: 'Customer login is currently disabled' });
+    if (!(s.customerLoginEnabled || s.requireMobileVerification)) return res.status(403).json({ error: 'Logins are paused for now — you can continue as a guest.' });
     if (!customer.firebaseUid) customer.firebaseUid = decoded.uid;
     customer.phoneVerified = true; customer.isGuest = false;
   }
@@ -177,10 +177,11 @@ router.put('/me/wishlist', requireCustomer, async (req, res) => {
 router.get('/me/orders', requireCustomer, async (req, res) => {
   const orders = await Order.find(ownedOrdersFilter(req.customer)).sort({ createdAt: -1 }).limit(50);
   const returns = await Return.find({ order: { $in: orders.map((o) => o._id) } }).select('-images');
+  const ctx = await require('../services/trackLink').loadCtx(); const finish = require('../services/trackLink').finish;
   res.json(orders.map((o) => {
     const obj = o.toJSON();
     const ret = returns.find((r) => String(r.order) === o.id);
-    return { ...obj, events: undefined, journey: buildJourney(obj), return: ret ? { id: ret.id, status: normalize(ret.status), journey: customerJourney(ret), amount: ret.amount, refund: ret.refund } : null };
+    return { ...obj, events: undefined, journey: finish(buildJourney(obj), obj, ctx), return: ret ? { id: ret.id, status: normalize(ret.status), journey: customerJourney(ret), amount: ret.amount, refund: ret.refund } : null };
   }));
 });
 

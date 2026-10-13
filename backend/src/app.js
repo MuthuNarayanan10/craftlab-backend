@@ -53,7 +53,8 @@ function createApp() {
   app.use('/api/webhooks/razorpay', express.raw({ type: '*/*', limit: '1mb' }), payments.webhookRouter);
 
   app.use('/api/returns', express.json({ limit: '8mb' }));          // customer damage photos
-  app.use('/api/admin/products', express.json({ limit: '10mb' }));  // product photos (base64)
+  app.use('/api/admin/products', express.json({ limit: '10mb' }));
+  app.use('/api/admin/hero', express.json({ limit: '8mb' }));         // homepage pictures (base64)  // product photos (base64)
   app.use('/api/admin/purchase-orders', express.json({ limit: '3mb' })); // scanned supplier invoices
   app.use('/api/admin/pincodes', express.json({ limit: '6mb' }));        // PIN-code CSV imports
   app.use(express.json({ limit: '2mb' }));
@@ -79,9 +80,11 @@ function createApp() {
   app.use('/api/pincode', require('./routes/pincode'));
   app.use('/api/search', require('./routes/search'));
   app.use('/api/collections', require('./routes/collections'));
+  app.use('/api/hero', require('./routes/hero'));
   app.use('/api/categories', require('./routes/categories'));
   app.use('/api/support', require('./routes/support'));
   app.use('/api/rewards', require('./routes/rewards'));
+  app.use('/api/webhooks', require('./routes/inboundMail'));
   app.use('/api/webhooks', require('./routes/webhooks'));            // courier tracking pushes (shared-secret token)
   app.use('/api', require('./routes/publicForms'));                  // /subscribers, /contact
 
@@ -95,11 +98,13 @@ function createApp() {
   admin('products', 'adminProducts');
   admin('inventory', 'adminInventory');
   admin('delivery', 'adminDelivery');
+  admin('couriers', 'adminCouriers');
   admin('pincodes', 'adminPincodes');
   admin('support', 'adminSupport');
   admin('rewards', 'adminRewards');
   admin('catalog', 'adminCatalog');
   admin('categories', 'adminCategories');
+  admin('hero', 'adminHero');
   admin('coupons', 'adminCoupons');
   admin('abandoned-carts', 'abandoned');
   admin('suppliers', 'adminSuppliers');

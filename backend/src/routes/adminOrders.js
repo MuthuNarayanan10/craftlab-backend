@@ -4,6 +4,7 @@ const Order = require('../models/Order');
 const { getSettings } = require('../models/Settings');
 const { getNextSequence } = require('../models/Counter');
 const { audit } = require('../models/AuditLog');
+const { requireRole } = require('../middleware/adminAuth');
 const { canTransition, allowedNext, buildJourney, STATUSES } = require('../utils/orderStatus');
 const { pushEvent } = require('../utils/orderEvents');
 const { changeStatus } = require('../services/orderService');
@@ -15,7 +16,7 @@ const esc = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const listItem = (o) => ({
   id: o.id, orderNumber: o.orderNumber, createdAt: o.createdAt, customer: o.customer, total: o.total,
   items: o.items.map((i) => ({ name: i.name, qty: i.qty })), payment: { method: o.payment?.method || '' }, paymentStatus: o.paymentStatus, orderStatus: o.orderStatus,
-  refundedAmount: o.refundedAmount, shipment: { awb: o.shipment?.awb, courierName: o.shipment?.courierName, status: o.shipment?.status, error: o.shipment?.error }, delivery: { partner: o.delivery?.partner, trackingId: o.delivery?.trackingId, method: o.delivery?.method?.name || '', type: o.delivery?.method?.type || '', assignee: o.delivery?.assignee?.name || '' },
+  refundedAmount: o.refundedAmount, shipment: { awb: o.shipment?.awb, courierName: o.shipment?.courierName, status: o.shipment?.status, error: o.shipment?.error }, delivery: { partner: o.delivery?.partner, trackingId: o.delivery?.trackingId, trackingUrl: o.delivery?.trackingUrl, method: o.delivery?.method?.name || '', type: o.delivery?.method?.type || '', assignee: o.delivery?.assignee?.name || '' },
 });
 
 // GET /api/admin/orders?page=&limit=&status=&mode=&q=&from=&to=   (server-side paging & search — safe at 10,000+ orders)
@@ -44,8 +45,8 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
-  const o = order.toJSON();
-  res.json({ ...o, allowedNext: allowedNext(o).filter((s) => s !== 'Refunded'), journey: buildJourney(o) });
+  const o = order.toJSON(); const ctx0 = await require('../services/trackLink').loadCtx();
+  res.json({ ...o, allowedNext: allowedNext(o).filter((s) => s !== 'Refunded'), journey: require('../services/trackLink').finish(buildJourney(o), o, ctx0), returnWindowDays: ctx0.days });
 });
 
 // PUT /api/admin/orders/:id/status
@@ -63,13 +64,14 @@ router.put('/:id/status', async (req, res) => {
 
 // PUT /api/admin/orders/:id/delivery — courier details (tracking number) OR, for manual delivery, who is delivering and when
 router.put('/:id/delivery', async (req, res) => {
-  const { partner, trackingId, dispatchDate, expectedDelivery, notes, assignee, scheduledFor } = req.body;
+  const { partner, trackingId, trackingUrl, dispatchDate, expectedDelivery, notes, assignee, scheduledFor } = req.body;
   const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   const before = { partner: order.delivery.partner, trackingId: order.delivery.trackingId, assignee: order.delivery.assignee?.name };
   const d = order.delivery;                                       // field by field — the chosen delivery method must never be overwritten
   if (partner !== undefined) d.partner = String(partner).slice(0, 60);
   if (trackingId !== undefined) d.trackingId = String(trackingId).slice(0, 60);
+  if (trackingUrl !== undefined) { const u = String(trackingUrl).trim().slice(0, 400); if (u && !/^https?:\/\/[^\s"'<>]+$/.test(u)) return res.status(400).json({ error: 'The tracking link must start with https://' }); d.trackingUrl = u; }
   if (dispatchDate !== undefined) d.dispatchDate = dispatchDate || null;
   if (expectedDelivery !== undefined) { d.expectedDelivery = expectedDelivery || null; if (expectedDelivery) order.estimatedDelivery = expectedDelivery; }
   if (notes !== undefined) d.notes = String(notes).slice(0, 500);
@@ -108,6 +110,19 @@ router.post('/:id/cancel', async (req, res) => {
   const { from } = await changeStatus(order, 'Cancelled', { actor: req.admin.email, note: String(req.body.reason || '').slice(0, 300) });
   await audit({ action: 'order.cancelled', actor: req.admin.email, entity: 'order', entityId: order.id, summary: `Cancelled Order ${order.orderNumber}`, before: { status: from }, after: { status: 'Cancelled' }, req });
   res.json({ cancelled: true, refundDue: paidOnline, total: order.total });
+});
+
+// DELETE /api/admin/orders/:id — permanently removes an order (store owner only). A live order is cancelled first so its stock goes back on sale.
+router.delete('/:id', requireRole('ADMIN'), async (req, res) => {
+  const order = await Order.findById(req.params.id);
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.orderStatus !== 'Cancelled' && canTransition(order, 'Cancelled').ok) {
+    if (order.shipment?.providerOrderId && order.shipment.status !== 'cancelled') { try { await shipments.cancelShipment(order, req.admin.email); } catch (e) { /* best effort */ } }
+    try { await changeStatus(order, 'Cancelled', { actor: req.admin.email, note: 'Order deleted by admin' }); } catch (e) { /* still deletable */ }
+  }
+  await Order.deleteOne({ _id: order._id });
+  await audit({ action: 'order.deleted', actor: req.admin.email, entity: 'order', entityId: order.id, summary: `Deleted order ${order.orderNumber} (₹${order.total}, ${order.paymentStatus})`, before: { orderStatus: order.orderStatus, paymentStatus: order.paymentStatus, total: order.total }, req });
+  res.json({ deleted: true, orderNumber: order.orderNumber, wasPaid: order.paymentStatus === 'Paid' });
 });
 
 /* ---------- courier shipments ---------- */

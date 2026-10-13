@@ -30,6 +30,10 @@ function startJobs() {
 
   // 2) pull courier tracking for shipments in flight (if a courier API is enabled)
   every(20 * 60e3, 'courier_sync', async () => (await Integration.countDocuments({ kind: 'courier', enabled: true })) ? syncAll(50) : null, 120e3);
+  // 2b) every 3 minutes: customer replies to our support mailbox become ticket messages (only if IMAP_* is set)
+  if (require('./services/imapPoll').configured()) every(3 * 60e3, 'support_mailbox', () => require('./services/imapPoll').pollMailbox(), 45e3);
+  // 2c) abandoned carts: one friendly reminder email, ~1 hour after the customer left (only with their consent)
+  every(10 * 60e3, 'abandoned_reminders', () => require('./services/abandonedCarts').sendDueReminders(), 150e3);
   // 3) retry notifications that failed
   every(15 * 60e3, 'notification_retry', async () => { const n = await retryFailedNotifications(); return n ? { changed: n } : null; }, 180e3);
 }

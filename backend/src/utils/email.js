@@ -23,6 +23,7 @@ async function sendViaBrevo(cfg, to, subject, html, opts) {
   const recipients = (Array.isArray(to) ? to : [to]).map((email) => ({ email }));
   const body = { sender: { email: cfg.senderEmail, name: cfg.senderName || 'The Craft Lab' }, to: recipients, subject, htmlContent: html };
   if (opts.replyTo) body.replyTo = { email: opts.replyTo };
+  if (opts.attachments?.length) body.attachment = opts.attachments.map((a) => ({ name: a.name, content: Buffer.from(a.content, 'utf8').toString('base64') }));
   const res = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', headers: { 'api-key': cfg.apiKey, 'Content-Type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body) });
   if (!res.ok) {
     const j = await res.json().catch(() => ({}));
@@ -50,7 +51,7 @@ async function sendEmail(to, subject, html, opts = {}) {
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: Array.isArray(to) && to.length === 1 ? to[0] : to, subject, html, ...(opts.replyTo ? { reply_to: opts.replyTo } : {}) }),
+      body: JSON.stringify({ from, to: Array.isArray(to) && to.length === 1 ? to[0] : to, subject, html, ...(opts.replyTo ? { reply_to: opts.replyTo } : {}), ...(opts.attachments?.length ? { attachments: opts.attachments.map((a) => ({ filename: a.name, content: Buffer.from(a.content, 'utf8').toString('base64') })) } : {}) }),
     });
     if (!res.ok) { // surface provider rejections (bad key, unverified domain, …) so callers — and the notification log — never record a failed email as sent
       const detail = (await res.text().catch(() => '')).slice(0, 200);

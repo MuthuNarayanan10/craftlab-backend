@@ -1,60 +1,30 @@
 const express = require('express');
 const router = express.Router();
 const Cart = require('../models/Cart');
+const svc = require('../services/abandonedCarts');
+const { audit } = require('../models/AuditLog');
+const { requireRole } = require('../middleware/adminAuth');
 
-// GET /api/admin/abandoned-carts — carts with contact info, inactive for 30+ minutes, not converted
-router.get('/', async (req, res) => {
-  const cutoff = new Date(Date.now() - 30 * 60 * 1000);
-  const carts = await Cart.find({
-    status: 'active',
-    'contact.consentToContact': true,
-    updatedAt: { $lt: cutoff },
-    'items.0': { $exists: true }, // has at least one item
-  })
-    .populate('items.product')
-    .sort({ updatedAt: -1 });
-
-  // Mark them as abandoned now that they've been surfaced (idempotent to re-run)
-  await Cart.updateMany({ _id: { $in: carts.map(c => c._id) } }, { status: 'abandoned' });
-
-  res.json(carts.map(c => {
-    const items = c.items.filter(i => i.product).map(i => ({ name: i.product.name, qty: i.qty, price: i.product.price }));
-    const value = items.reduce((s, i) => s + i.price * i.qty, 0);
-    const firstName = (c.contact.name || '').split(' ')[0] || 'there';
-    const itemList = items.map(i => i.name).join(', ');
-
-    // Dynamic, rule-based message templating — escalates gently with each
-    // follow-up. Not a live AI/LLM call (see the note on the admin page).
-    let suggestedMessage;
-    if (c.recoveryMessagesSent === 0) {
-      suggestedMessage = `Hi ${firstName}! We noticed you left ${itemList} in your Craft Lab cart. Still thinking it over? Happy to answer any questions — just reply here.`;
-    } else if (c.recoveryMessagesSent === 1) {
-      suggestedMessage = `Hi ${firstName}, your ${itemList} is still saved for you. Complete your order in the next 24 hours and use code COMEBACK5 for 5% off.`;
-    } else {
-      suggestedMessage = `Hi ${firstName}, last call on your Craft Lab cart (${itemList}) — use code COMEBACK10 for 10% off if you complete it today.`;
-    }
-
-    return {
-      id: c.id,
-      contact: c.contact,
-      items,
-      value,
-      updatedAt: c.updatedAt,
-      recoveryMessagesSent: c.recoveryMessagesSent,
-      suggestedMessage,
-    };
-  }));
-});
-
-// POST /api/admin/abandoned-carts/:id/mark-contacted — logs a manual WhatsApp/email follow-up
+// GET /api/admin/abandoned-carts — carts with items and a way to reach the buyer, idle for 30+ minutes, not converted. Viewing never changes them.
+router.get('/', async (req, res) => res.json(await svc.list()));
+// POST /api/admin/abandoned-carts/:id/mark-contacted — logs a manual WhatsApp follow-up
 router.post('/:id/mark-contacted', async (req, res) => {
-  const cart = await Cart.findByIdAndUpdate(
-    req.params.id,
-    { $inc: { recoveryMessagesSent: 1 }, lastRecoveryAt: new Date() },
-    { new: true }
-  );
+  const cart = await Cart.findByIdAndUpdate(req.params.id, { $inc: { recoveryMessagesSent: 1 }, lastRecoveryAt: new Date() }, { new: true });
   if (!cart) return res.status(404).json({ error: 'Cart not found' });
   res.json({ recoveryMessagesSent: cart.recoveryMessagesSent });
 });
-
+// POST /api/admin/abandoned-carts/:id/send-email — one reminder email with a "return to my cart" button
+router.post('/:id/send-email', async (req, res) => {
+  const cart = await Cart.findById(req.params.id); if (!cart) return res.status(404).json({ error: 'Cart not found' });
+  const r = await svc.sendReminder(cart, { manual: true });
+  if (!r.sent) return res.status(400).json({ error: r.reason });
+  await audit({ action: 'cart.reminder_sent', actor: req.admin.email, entity: 'cart', entityId: cart.id, summary: `Cart reminder emailed to ${cart.contact.email}`, req });
+  res.json({ sent: true, recoveryMessagesSent: cart.recoveryMessagesSent });
+});
+// DELETE /api/admin/abandoned-carts/:id — remove a cart from the list
+router.delete('/:id', requireRole('ADMIN'), async (req, res) => {
+  const c = await Cart.findByIdAndDelete(req.params.id); if (!c) return res.status(404).json({ error: 'Cart not found' });
+  await audit({ action: 'cart.deleted', actor: req.admin.email, entity: 'cart', entityId: c.id, summary: 'Deleted an abandoned cart', req });
+  res.json({ deleted: true });
+});
 module.exports = router;

@@ -50,6 +50,13 @@ router.put('/:id', async (req, res) => {
 });
 
 router.delete('/:id', async (req, res) => {
+  if (req.query.hard === '1') { // permanent delete: old orders keep their own copy of the name / price, so they are unaffected
+    const gone = await Product.findByIdAndDelete(req.params.id);
+    if (!gone) return res.status(404).json({ error: 'Product not found' });
+    await require('../models/Cart').updateMany({}, { $pull: { items: { product: gone._id } } }).catch(() => {});
+    await audit({ action: 'product.deleted', actor: req.admin.email, entity: 'product', entityId: gone.id, summary: `Deleted product ${gone.name}`, req });
+    return res.json({ deleted: true });
+  }
   const product = await Product.findByIdAndUpdate(req.params.id, { status: 'archived' }, { new: true });
   if (!product) return res.status(404).json({ error: 'Product not found' });
   await audit({ action: 'product.archived', actor: req.admin.email, entity: 'product', entityId: product.id, summary: `Archived ${product.name}`, req });

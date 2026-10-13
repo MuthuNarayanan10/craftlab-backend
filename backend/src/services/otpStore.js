@@ -3,6 +3,7 @@ const wrap = (d) => d && { id: d.id, phone: d.phone, codeHash: d.codeHash, expir
 module.exports = {
   latest: async (phone) => wrap(await OtpRequest.findOne({ phone }).sort({ createdAt: -1 })),
   latestActive: async (phone) => wrap(await OtpRequest.findOne({ phone, consumed: false }).sort({ createdAt: -1 })),
+  listActive: async (phone) => (await OtpRequest.find({ phone, consumed: false }).sort({ createdAt: -1 }).limit(5)).map(wrap),
   countRecent: ({ phone, ip, since }) => OtpRequest.countDocuments({ ...(phone ? { phone } : { ip }), createdAt: { $gte: since } }),
   create: async (d) => wrap(await OtpRequest.create(d)),
   incrementAttempts: async (id) => (await OtpRequest.findByIdAndUpdate(id, { $inc: { attempts: 1 } }, { new: true })).attempts,

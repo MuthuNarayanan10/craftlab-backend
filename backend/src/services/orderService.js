@@ -78,6 +78,7 @@ async function confirmPayment(orderId, { paymentId, signature = '', method = '',
   await createNotification('new_order', `New order ${order.orderNumber} — ₹${order.total}`, { orderNumber: order.orderNumber });
   await audit({ action: 'order.paid', actor, entity: 'order', entityId: order.id, summary: `Order ${order.orderNumber} paid — ₹${order.total} (${via})` });
   notifyOrder('order_placed', { order }); notifyOrder('payment_confirmed', { order });
+  require('./invoiceMail').sendInvoiceEmail(order, settings).catch(() => {});
   alertOwner(order, settings);
   triggerAutoShipment(order, settings);
   return { order, already: false };
@@ -98,6 +99,7 @@ async function finalizeCodOrder(order) {
   await createNotification('new_order', `New COD order ${order.orderNumber} — ₹${order.total}`, { orderNumber: order.orderNumber });
   await audit({ action: 'order.cod_placed', actor: 'customer', entity: 'order', entityId: order.id, summary: `COD order ${order.orderNumber} — ₹${order.total}` });
   notifyOrder('order_placed', { order });
+  require('./invoiceMail').sendInvoiceEmail(order, settings).catch(() => {});
   alertOwner(order, settings);
   triggerAutoShipment(order, settings);
 }

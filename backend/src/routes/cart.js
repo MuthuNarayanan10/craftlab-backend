@@ -63,10 +63,11 @@ router.delete('/:cartId/items/:productId', async (req, res) => {
 // PUT /api/cart/:cartId/contact — captures contact info early for abandoned-cart recovery.
 // Requires explicit consent to be recorded before it's usable for follow-up messaging.
 router.put('/:cartId/contact', async (req, res) => {
-  const { name, phone, email, consentToContact } = req.body;
+  const str = (v, n) => (typeof v === 'string' ? v.trim().slice(0, n) : '');
+  const email = str(req.body.email, 120).toLowerCase(), phone = str(req.body.phone, 20).replace(/[^\d+]/g, '');
   const cart = await Cart.findOneAndUpdate(
-    { cartId: req.params.cartId },
-    { contact: { name, phone, email, consentToContact: !!consentToContact } },
+    { cartId: req.params.cartId, status: { $ne: 'converted' } },
+    { contact: { name: str(req.body.name, 80), phone, email: /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) ? email : '', consentToContact: !!req.body.consentToContact } },
     { new: true }
   );
   if (!cart) return res.status(404).json({ error: 'Cart not found' });

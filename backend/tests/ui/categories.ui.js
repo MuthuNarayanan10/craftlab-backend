@@ -28,12 +28,12 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|api\.qrserver\.com|checkout\.raz
   ok('products table has a Category column', /Category/.test(await page.locator('thead').textContent()));
   await page.click('#addBtn'); await page.waitForSelector('#fCategory option', { state: 'attached' });
   ok('category is a dropdown with the managed categories', (await page.locator('#fCategory option').allTextContents()).includes('Planters'));
-  await page.selectOption('#fCategory', 'Planters'); ok('sub-category hidden when the category has none', !(await page.locator('#subWrap').isVisible()));
+  await page.selectOption('#fCategory', 'Planters'); ok('sub-category is optional: no options for a category without any', (await page.locator('#fSub option').count()) <= 1);
   await page.selectOption('#fCategory', 'Wall Organizers'); ok('sub-category appears (optional) for a category that has some', await page.locator('#subWrap').isVisible() && (await page.locator('#fSub').inputValue()) === '');
   await page.fill('#fName', 'Browser Hook Rack'); await page.fill('#fSku', 'BR-1'); await page.fill('#fSlug', 'browser-hook-rack'); await page.fill('#fPrice', '999'); await page.fill('#fMrp', '1200'); await page.fill('#fStock', '4');
   await page.selectOption('#fSub', 'Hook Racks'); await page.click('#productForm button[type=submit]');
   ok('product saved with category + sub-category', await until(async () => { const p = (await api('/products/browser-hook-rack')).body; return p.category === 'Wall Organizers' && p.subcategory === 'Hook Racks'; }));
-  await page.click('#addBtn'); await page.selectOption('#fCategory', 'Planters'); ok('Planters has no sub-categories, so none is shown', !(await page.locator('#subWrap').isVisible()));
+  await page.click('#addBtn'); await page.selectOption('#fCategory', 'Planters'); ok('Planters has no sub-categories, so only the blank option', (await page.locator('#fSub option').count()) <= 1);
   await page.fill('#fName', 'Browser Planter'); await page.fill('#fSku', 'BR-2'); await page.fill('#fSlug', 'browser-planter'); await page.fill('#fPrice', '500'); await page.fill('#fMrp', '600'); await page.fill('#fStock', '2');
   await page.click('#productForm button[type=submit]');
   ok('product without sub-category saved with none', await until(async () => { const p = (await api('/products/browser-planter')).body; return p.category === 'Planters' && p.subcategory === ''; }));

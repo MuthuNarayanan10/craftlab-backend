@@ -15,6 +15,7 @@ const settingsSchema = new mongoose.Schema({
   phone: { type: String, default: '' },
   email: { type: String, default: 'care@thecraftlab.co.in' },
   invoicePrefix: { type: String, default: 'INV' },
+  hsnCode: { type: String, default: '' }, // printed on GST invoices (ask your CA which HSN fits your products)
   defaultTaxRate: { type: Number, default: 0 },
   // Checkout / payments
   codEnabled: { type: Boolean, default: false },
@@ -53,6 +54,7 @@ const settingsSchema = new mongoose.Schema({
   stockHoldMinutes: { type: Number, default: 10, min: 3, max: 60 }, // how long stock is held for a customer in checkout / awaiting payment
   supportHours: { type: String, default: 'Mon–Sat 10 AM – 6 PM IST' },
   categories: { type: [{ name: String, slug: String, subcategories: { type: [{ name: String, slug: String, _id: false }], default: [] }, _id: false }], default: [] }, // shop categories → optional sub-categories (managed in Admin → Categories)
+  heroSlides: { type: [{ image: String, alt: { type: String, default: '' }, link: { type: String, default: '' }, enabled: { type: Boolean, default: true }, _id: false }], default: [] }, // homepage hero pictures (carousel when 2+)
   collections: { type: [{ key: String, title: String, enabled: { type: Boolean, default: true }, mode: { type: String, default: 'manual' }, limit: { type: Number, default: 8 }, _id: false }], default: [
     { key: 'featured', title: 'Featured Products', enabled: true, mode: 'manual', limit: 8 }, { key: 'new-arrivals', title: 'New Arrivals', enabled: true, mode: 'auto', limit: 8 },
     { key: 'best-sellers', title: 'Best Sellers', enabled: true, mode: 'auto', limit: 8 }, { key: 'recommended', title: 'Recommended For You', enabled: false, mode: 'manual', limit: 8 }] },
