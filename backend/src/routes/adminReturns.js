@@ -104,4 +104,11 @@ router.post('/:id/refund', requireRole('ADMIN'), async (req, res) => {
   }
 });
 
+
+// DELETE /api/admin/returns/:id — removes the record (owner only). A refund that was already paid out is NOT reversed.
+router.delete('/:id', requireRole('ADMIN'), async (req, res) => {
+  const r = await Return.findByIdAndDelete(req.params.id); if (!r) return res.status(404).json({ error: 'Return not found' });
+  await audit({ action: 'return.deleted', actor: req.admin.email, entity: 'return', entityId: r.id, summary: `Return deleted for ${r.orderNumber} (${r.status})`, req });
+  res.json({ ok: true });
+});
 module.exports = router;

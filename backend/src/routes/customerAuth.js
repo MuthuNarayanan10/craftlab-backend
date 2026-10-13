@@ -52,6 +52,9 @@ async function buildOtpService(settings, channel) {
   }
   return createOtpService({ store: otpStore, sender, hmacSecret: process.env.OTP_HMAC_SECRET || process.env.JWT_SECRET, channel: ch === 'email' ? 'email' : 'phone' });
 }
+// Tell the owner WHY login codes are failing (once an hour at most) — customers only see a friendly message.
+let lastOtpAlert = 0;
+function alertOtpFailure(cause) { if (Date.now() - lastOtpAlert < 3600e3) return; lastOtpAlert = Date.now(); require('../models/Notification').createNotification('otp_failed', `Customers can’t get login codes: ${String(cause || 'unknown error').slice(0, 220)} — check Admin → Integrations → Send test code.`); }
 function sendError(res, e) {
   if (e instanceof OtpError) return res.status(e.status).json({ error: e.message, code: e.code, retryAfterSec: e.retryAfterSec });
   throw e;
@@ -71,7 +74,7 @@ router.post('/otp/send', need((s) => s.otpEnabled && SERVER_PROVIDERS.includes(s
     const email = ch === 'email';
     const r = await svc.send(email ? req.body.email : req.body.phone, req.ip);
     res.json({ sent: true, phone: r.phone, identifier: r.identifier, channel: email ? 'email' : 'phone', expiresInSec: r.expiresInSec, resendAfterSec: r.resendAfterSec, resendsLeft: r.resendsLeft, devCode: r.devCode });
-  } catch (e) { if (e instanceof OtpError && e.code === 'SEND_FAILED') logger.error('otp_send_failed', { cause: e.cause }); sendError(res, e); }
+  } catch (e) { if (e instanceof OtpError && e.code === 'SEND_FAILED') { logger.error('otp_send_failed', { cause: e.cause }); alertOtpFailure(e.cause); } sendError(res, e); }
 });
 
 router.post('/otp/verify', (req, res, next) => (termsOk(req, res) ? next() : undefined), need((s) => s.otpEnabled && SERVER_PROVIDERS.includes(s.otpProvider), 'Quick login is taking a short break — you can continue as a guest.'), async (req, res) => {

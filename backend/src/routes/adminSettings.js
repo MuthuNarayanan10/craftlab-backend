@@ -5,10 +5,10 @@ const { requireRole } = require('../middleware/adminAuth');
 const { resetNotifierCache } = require('../services/notifier');
 const { audit } = require('../models/AuditLog');
 
-const TEXT = ['supportHours', 'businessName', 'legalName', 'gstin', 'pan', 'address', 'city', 'state', 'pincode', 'phone', 'email', 'invoicePrefix', 'supportWhatsapp', 'hsnCode'];
-const NUM = { rewardEarnPercent: [0, 50], rewardRedeemMaxPercent: [0, 100], rewardRedeemMinPoints: [0, 100000], cashbackPercent: [0, 50], cashbackMinOrder: [0, 1000000], stockHoldMinutes: [3, 60], defaultTaxRate: [0, 100], codFee: [0, 10000], prepaidDiscountPercent: [0, 50], returnWindowDays: [0, 60] };
-const BOOL = ['rewardsEnabled', 'giftCardsEnabled', 'codEnabled', 'customerLoginEnabled', 'customerSignupEnabled', 'otpEnabled', 'guestCheckoutEnabled', 'autoCreateAccounts', 'requireMobileVerification', 'autoCreateShipment', 'notifyEmailEnabled', 'notifyWhatsappEnabled', 'autoApproveReturns'];
-const ENUM = { pincodeCheckMode: ['off', 'registry'], otpProvider: ['none', 'dev', 'msg91', 'brevo', 'zeptomail', 'firebase'], otpChannel: ['sms', 'email'], defaultCourierProvider: ['manual', 'shiprocket', 'delhivery'] };
+const TEXT = ['supportHours', 'businessName', 'legalName', 'gstin', 'pan', 'address', 'city', 'state', 'pincode', 'phone', 'email', 'invoicePrefix', 'supportWhatsapp', 'hsnCode', 'welcomeOfferCode'];
+const NUM = { welcomeOfferPercent: [1, 50], welcomeOfferMinOrder: [0, 1000000], rewardEarnPercent: [0, 50], rewardRedeemMaxPercent: [0, 100], rewardRedeemMinPoints: [0, 100000], cashbackPercent: [0, 50], cashbackMinOrder: [0, 1000000], stockHoldMinutes: [3, 60], defaultTaxRate: [0, 100], codFee: [0, 10000], prepaidDiscountPercent: [0, 50], returnWindowDays: [0, 60] };
+const BOOL = ['rewardsEnabled', 'giftCardsEnabled', 'codEnabled', 'customerLoginEnabled', 'customerSignupEnabled', 'otpEnabled', 'guestCheckoutEnabled', 'autoCreateAccounts', 'requireMobileVerification', 'autoCreateShipment', 'notifyEmailEnabled', 'notifyWhatsappEnabled', 'autoApproveReturns', 'welcomeOfferEnabled'];
+const ENUM = { pincodeCheckMode: ['off', 'registry'], otpProvider: ['none', 'dev', 'msg91', 'brevo', 'zeptomail', 'firebase'], otpChannel: ['sms', 'email'], emailLevel: ['essential', 'all'], defaultCourierProvider: ['manual', 'shiprocket', 'delhivery'] };
 
 router.get('/', async (req, res) => res.json(await getSettings()));
 
@@ -28,7 +28,9 @@ router.put('/', requireRole('ADMIN'), async (req, res) => {
   if (s.supportWhatsapp) s.supportWhatsapp = s.supportWhatsapp.replace(/\D/g, '');
   if (s.otpProvider === 'dev' && process.env.NODE_ENV === 'production' && process.env.ALLOW_DEV_OTP !== 'true') return res.status(400).json({ error: 'The “dev” OTP provider can’t be used in production. Choose MSG91 or Firebase.' });
   if (!s.customerLoginEnabled && !s.guestCheckoutEnabled && !s.requireMobileVerification) return res.status(400).json({ error: 'Customers must be able to buy: keep Login or Guest checkout switched on.' });
+  s.welcomeOfferCode = require('../services/welcomeOffer').cleanCode(s.welcomeOfferCode, s.welcomeOfferPercent);
   await s.save();
+  await require('../services/welcomeOffer').ensureWelcomeCoupon(s).catch(() => {});
   resetNotifierCache();
   const after = s.toObject();
   const changed = Object.keys(after).filter((k) => !['updatedAt', '__v'].includes(k) && JSON.stringify(before[k]) !== JSON.stringify(after[k]));

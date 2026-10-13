@@ -97,6 +97,7 @@ const orderSchema = new mongoose.Schema({
     method: { key: { type: String, default: '' }, name: { type: String, default: '' }, type: { type: String, default: '' }, fee: { type: Number, default: 0 }, etaMinDays: { type: Number, default: 0 }, etaMaxDays: { type: Number, default: 0 }, courierProvider: { type: String, default: '' } },
     assignee: { name: { type: String, default: '' }, phone: { type: String, default: '' } },   // manual delivery: who is delivering
     scheduledFor: { type: Date, default: null },                                                // manual delivery: planned delivery time
+    manualId: { type: String, default: '' },                                                       // our own delivery reference, MD-<order number>, created for every order
     partner: { type: String, default: '' }, trackingId: { type: String, default: '' }, trackingUrl: { type: String, default: '' },
     dispatchDate: { type: Date, default: null }, expectedDelivery: { type: Date, default: null }, notes: { type: String, default: '' },
   },
@@ -114,6 +115,7 @@ const orderSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Indexes for the queries that run constantly (admin lists, customer history, payment lookups, courier sync)
+orderSchema.pre('save', function (next) { if (this.orderNumber && !this.delivery.manualId) this.delivery.manualId = 'MD-' + String(this.orderNumber).replace(/^#/, ''); next(); });
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ orderStatus: 1, createdAt: -1 });
 orderSchema.index({ customerId: 1, createdAt: -1 });
@@ -129,6 +131,7 @@ orderSchema.methods.toJSON = function () {
   const obj = this.toObject();
   obj.id = obj._id.toString();
   delete obj._id; delete obj.__v;
+  if (obj.delivery && !obj.delivery.manualId && obj.orderNumber) obj.delivery.manualId = 'MD-' + String(obj.orderNumber).replace(/^#/, '');
   if (obj.payment) delete obj.payment.razorpaySignature;
   if (obj.wallet?.giftCards) obj.wallet.giftCards = obj.wallet.giftCards.map((g) => ({ code: 'GC-••••-••••-' + String(g.code || '').slice(-4), amount: g.amount, restored: g.restored || 0 })); // bearer codes must never leak
   return obj;

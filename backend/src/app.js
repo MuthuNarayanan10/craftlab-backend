@@ -25,10 +25,13 @@ function createApp() {
   // CORS — only the storefront/admin origins you list in CORS_ORIGIN may call the API from a browser.
   const allowed = (process.env.CORS_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
   const isProd = process.env.NODE_ENV === 'production';
+  // an entry may use * for one sub-domain label, e.g. https://*.netlify.app (handy for the public test site)
+  const wild = allowed.filter((a) => a.includes('*')).map((a) => new RegExp('^' + a.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '[a-z0-9-]+') + '$', 'i'));
+  const originAllowed = (o) => allowed.includes(o) || wild.some((re) => re.test(o));
   app.use(cors({
     origin(origin, cb) {
       if (!origin) return cb(null, true);                           // server-to-server (webhooks, health checks)
-      if (allowed.includes(origin) || (!isProd && allowed.length === 0)) return cb(null, true);
+      if (originAllowed(origin) || (!isProd && allowed.length === 0)) return cb(null, true);
       const e = new Error('Origin not allowed'); e.status = 403; cb(e);
     },
     exposedHeaders: ['X-Request-Id'],
@@ -44,6 +47,7 @@ function createApp() {
   app.use('/api/customers/otp/verify', limiter(15, 30, 'Too many verification attempts. Please wait a few minutes.'));
   app.use('/api/checkout', limiter(15, 60, 'Too many checkout attempts. Please wait a few minutes.'));
   app.use(['/api/contact', '/api/subscribers'], limiter(60, 20));
+  app.post('/api/reviews', limiter(30, 30, 'Too many requests. Please try again in a little while.'));
   app.use('/api/rewards/gift-card', limiter(15, 15, 'Too many gift-card checks. Please try again later.'));
   const supportLimiter = limiter(60, 10, 'Too many requests. Please try again later or WhatsApp us.'); // created ONCE — a limiter built per request never counts anything
   app.use('/api/support', (req, res, next) => (req.method === 'POST' && req.path === '/' ? supportLimiter(req, res, next) : next()));
@@ -53,6 +57,7 @@ function createApp() {
   app.use('/api/webhooks/razorpay', express.raw({ type: '*/*', limit: '1mb' }), payments.webhookRouter);
 
   app.use('/api/returns', express.json({ limit: '8mb' }));          // customer damage photos
+  app.use(['/api/support', '/api/admin/support'], express.json({ limit: '8mb' })); // ticket attachments (photos / PDF)
   app.use('/api/admin/products', express.json({ limit: '10mb' }));
   app.use('/api/admin/hero', express.json({ limit: '8mb' }));         // homepage pictures (base64)  // product photos (base64)
   app.use('/api/admin/purchase-orders', express.json({ limit: '3mb' })); // scanned supplier invoices
@@ -81,6 +86,7 @@ function createApp() {
   app.use('/api/search', require('./routes/search'));
   app.use('/api/collections', require('./routes/collections'));
   app.use('/api/hero', require('./routes/hero'));
+  app.use('/api/reviews', require('./routes/reviews'));
   app.use('/api/categories', require('./routes/categories'));
   app.use('/api/support', require('./routes/support'));
   app.use('/api/rewards', require('./routes/rewards'));
@@ -105,6 +111,7 @@ function createApp() {
   admin('catalog', 'adminCatalog');
   admin('categories', 'adminCategories');
   admin('hero', 'adminHero');
+  admin('reviews', 'adminReviews');
   admin('coupons', 'adminCoupons');
   admin('abandoned-carts', 'abandoned');
   admin('suppliers', 'adminSuppliers');

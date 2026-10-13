@@ -7,6 +7,7 @@ module.exports = {
   countRecent: ({ phone, ip, since }) => OtpRequest.countDocuments({ ...(phone ? { phone } : { ip }), createdAt: { $gte: since } }),
   create: async (d) => wrap(await OtpRequest.create(d)),
   incrementAttempts: async (id) => (await OtpRequest.findByIdAndUpdate(id, { $inc: { attempts: 1 } }, { new: true })).attempts,
+  remove: (id) => OtpRequest.deleteOne({ _id: id }),
   consume: (id) => OtpRequest.findByIdAndUpdate(id, { consumed: true }),
   invalidate: (phone) => OtpRequest.updateMany({ phone, consumed: false }, { consumed: true }),
 };

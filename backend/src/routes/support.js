@@ -11,11 +11,12 @@ const Product = require('../models/Product');
 const QUERY_TYPES = ['Product question', 'Order status', 'Shipping & delivery', 'Return / exchange / refund', 'Payment', 'Custom or bulk order', 'Other'];
 const { ownedOrdersFilter } = require('../utils/ownership');
 const { audit } = require('../models/AuditLog');
+const { cleanAttachments } = require('../utils/attachments');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const clean = (s, n) => String(s || '').trim().slice(0, n);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const customerView = (t) => ({ id: t.id, ticketNumber: t.ticketNumber, subject: t.subject, queryType: t.queryType, category: t.category, subcategory: t.subcategory, productName: t.productName, status: t.status, orderNumber: t.orderNumber, createdAt: t.createdAt, updatedAt: t.updatedAt, messages: t.messages.filter((m) => m.from !== 'note').map((m) => ({ from: m.from, text: m.text, at: m.at })) });
+const customerView = (t) => ({ id: t.id, ticketNumber: t.ticketNumber, subject: t.subject, queryType: t.queryType, category: t.category, subcategory: t.subcategory, productName: t.productName, status: t.status, orderNumber: t.orderNumber, createdAt: t.createdAt, updatedAt: t.updatedAt, messages: t.messages.filter((m) => m.from !== 'note').map((m) => ({ from: m.from, text: m.text, at: m.at, attachments: (m.attachments || []).map((a) => ({ name: a.name, data: a.data })) })) });
 const mailTo = (to, subject, html, opts) => sendEmail(to, subject, html, opts).catch(() => {});
 
 // POST /api/support — a logged-in customer's details are filled in from their account (the browser can't override them)
@@ -35,8 +36,9 @@ router.post('/', optionalCustomer, async (req, res) => {
   if (!category) subcategory = '';
   if (subject.length < 3) return res.status(400).json({ error: 'Please add a subject' });
   if (message.length < 5) return res.status(400).json({ error: 'Please tell us a little more in your message' });
+  let attachments; try { attachments = cleanAttachments(b.attachments); } catch (e) { return res.status(400).json({ error: e.message }); }
 
-  const ticket = await SupportTicket.create({ ticketNumber: `TKT-${await getNextSequence('ticket')}`, customerId: c ? c.id : null, name, phone, email, orderNumber, subject, queryType, category, subcategory, productName, productSku, status: 'New', messages: [{ from: 'customer', text: message, by: name }] });
+  const ticket = await SupportTicket.create({ ticketNumber: `TKT-${await getNextSequence('ticket')}`, customerId: c ? c.id : null, name, phone, email, orderNumber, subject, queryType, category, subcategory, productName, productSku, status: 'New', messages: [{ from: 'customer', text: message, by: name, attachments }] });
   await createNotification('support_request', `New support request ${ticket.ticketNumber} from ${name}: ${subject}`, { ticketNumber: ticket.ticketNumber });
   const settings = await getSettings();
   const topic = [queryType, category && (category + (subcategory ? ' › ' + subcategory : '')), productName].filter(Boolean).map(esc).join(' · ');
@@ -55,8 +57,9 @@ router.get('/mine', requireCustomer, async (req, res) => {
 router.post('/mine/:id/reply', requireCustomer, async (req, res) => {
   const t = await SupportTicket.findOne({ _id: req.params.id, customerId: req.customer.id });
   if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  const text = clean(req.body.message, 4000); if (text.length < 2) return res.status(400).json({ error: 'Write your reply first' });
-  t.messages.push({ from: 'customer', text, by: t.name }); t.lastCustomerMessageAt = new Date();
+  const text = clean(req.body.message, 4000); let attachments; try { attachments = cleanAttachments(req.body.attachments); } catch (e) { return res.status(400).json({ error: e.message }); }
+  if (text.length < 2 && !attachments.length) return res.status(400).json({ error: 'Write your reply first' });
+  t.messages.push({ from: 'customer', text: text || '(attachment)', by: t.name, attachments }); t.lastCustomerMessageAt = new Date();
   if (['WaitingCustomer', 'Resolved', 'Closed'].includes(t.status)) t.status = 'Open';
   await t.save(); await createNotification('support_request', `Customer replied on ${t.ticketNumber}`, { ticketNumber: t.ticketNumber });
   res.json(customerView(t));

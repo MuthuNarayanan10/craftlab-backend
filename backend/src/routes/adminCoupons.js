@@ -23,6 +23,7 @@ router.put('/:id', async (req, res) => {
 
 // DELETE /api/admin/coupons/:id — deactivates rather than deletes
 router.delete('/:id', async (req, res) => {
+  if (req.query.hard) { await Coupon.findByIdAndDelete(req.params.id); return res.json({ deleted: true }); }
   await Coupon.findByIdAndUpdate(req.params.id, { active: false });
   res.json({ deactivated: true });
 });

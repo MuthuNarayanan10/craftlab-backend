@@ -5,6 +5,7 @@ const { STATUSES } = SupportTicket;
 const { getSettings } = require('../models/Settings');
 const { sendEmail } = require('../utils/email');
 const { audit } = require('../models/AuditLog');
+const { cleanAttachments } = require('../utils/attachments');
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const rx = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -30,19 +31,27 @@ router.put('/:id/status', async (req, res) => {
 // POST /api/admin/support/:id/reply {text, internal}
 router.post('/:id/reply', async (req, res) => {
   const t = await SupportTicket.findById(req.params.id); if (!t) return res.status(404).json({ error: 'Ticket not found' });
-  const text = String(req.body.text || '').trim().slice(0, 4000); if (text.length < 2) return res.status(400).json({ error: 'Write a message first' });
+  const text = String(req.body.text || '').trim().slice(0, 4000); let attachments; try { attachments = cleanAttachments(req.body.attachments); } catch (e) { return res.status(400).json({ error: e.message }); }
+  if (text.length < 2 && !attachments.length) return res.status(400).json({ error: 'Write a message first' });
   const internal = !!req.body.internal;
-  t.messages.push({ from: internal ? 'note' : 'admin', text, by: req.admin.email });
+  t.messages.push({ from: internal ? 'note' : 'admin', text: text || '(attachment)', by: req.admin.email, attachments });
   if (!internal) { if (['New', 'Open', 'InProgress'].includes(t.status)) t.status = 'WaitingCustomer'; }
   else if (t.status === 'New') t.status = 'Open';
   await t.save();
   let emailed = false;
   if (!internal && t.email) {
     const s = await getSettings();
-    const r = await sendEmail(t.email, `Re: ${t.subject} [${t.ticketNumber}]`, `<div style="font-family:sans-serif;max-width:560px;color:#2A2620"><p>Hi ${esc(t.name.split(' ')[0])},</p><p style="white-space:pre-wrap">${esc(text)}</p><hr style="border:none;border-top:1px solid #eee"><p style="color:#6B6255;font-size:13px">Reference ${esc(t.ticketNumber)} · reply to this email or write to ${esc(s.email || 'care@thecraftlab.co.in')} · ${esc(s.supportHours)}</p></div>`, s.email ? { replyTo: s.email } : {}).catch(() => ({ error: 'failed' }));
+    const r = await sendEmail(t.email, `Re: ${t.subject} [${t.ticketNumber}]`, `<div style="font-family:sans-serif;max-width:560px;color:#2A2620"><p>Hi ${esc(t.name.split(' ')[0])},</p><p style="white-space:pre-wrap">${esc(text)}</p><hr style="border:none;border-top:1px solid #eee"><p style="color:#6B6255;font-size:13px">Reference ${esc(t.ticketNumber)} · reply to this email or write to ${esc(s.email || 'care@thecraftlab.co.in')} · ${esc(s.supportHours)}</p></div>`, { ...(s.email ? { replyTo: s.email } : {}), ...(attachments.length ? { attachments: attachments.map((a) => ({ name: a.name, content: a.data.split(',')[1], base64: true })) } : {}) }).catch(() => ({ error: 'failed' }));
     emailed = !(r && (r.skipped || r.error));
   }
   await audit({ action: internal ? 'support.note' : 'support.replied', actor: req.admin.email, entity: 'support_ticket', entityId: t.id, summary: `${internal ? 'Internal note on' : 'Replied to'} ${t.ticketNumber}`, req });
   res.json({ ticket: { ...t.toObject(), id: t.id }, emailed });
+});
+
+// DELETE /api/admin/support/:id — owner only
+router.delete('/:id', require('../middleware/adminAuth').requireRole('ADMIN'), async (req, res) => {
+  const t = await SupportTicket.findById(req.params.id); if (!t) return res.status(404).json({ error: 'Ticket not found' }); await SupportTicket.deleteOne({ _id: t._id });
+  await audit({ action: 'support.deleted', actor: req.admin.email, entity: 'support', entityId: t.id, summary: `Ticket ${t.ticketNumber} deleted`, req });
+  res.json({ ok: true });
 });
 module.exports = router;

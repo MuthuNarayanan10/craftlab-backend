@@ -57,7 +57,7 @@ test('SETUP: database, admin users, products, settings', async () => {
   S.p1 = await M.Product.create({ name: 'Sculptural Rack', slug: 'sculptural-rack', sku: 'SKU1', price: 2499, mrp: 2999, stock: 200, lowStockThreshold: 2, images: ['images/a.jpg'] });
   S.p2 = await M.Product.create({ name: 'Row Rack', slug: 'row-rack', sku: 'SKU2', price: 1500, mrp: 1800, stock: 3, lowStockThreshold: 2 });
   const { getSettings } = require('../src/models/Settings'); const st = await getSettings();
-  Object.assign(st, { codEnabled: true, prepaidDiscountPercent: 5, otpEnabled: true, otpProvider: 'dev', state: 'Tamil Nadu', defaultTaxRate: 18, returnWindowDays: 7, invoicePrefix: 'INV', email: 'owner@shop.test' }); await st.save();
+  Object.assign(st, { codEnabled: true, prepaidDiscountPercent: 5, otpEnabled: true, otpProvider: 'dev', state: 'Tamil Nadu', defaultTaxRate: 18, returnWindowDays: 7, invoicePrefix: 'INV', emailLevel: 'all', welcomeOfferEnabled: false, email: 'owner@shop.test' }); await st.save();
 });
 
 test('public config exposes only safe settings and the auth switches', async () => {

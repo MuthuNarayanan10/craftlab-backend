@@ -49,7 +49,7 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|api\.qrserver\.com/;
 
   /* return window: open, then closed */
   const dp = await ctx.newPage(); await dp.goto(`${B}/order-tracking.html?order=${o4.orderNumber}`); await dp.fill('#fContact', '9876543210'); await dp.click('#lookup button[type=submit]'); await dp.waitForSelector('.trk-hero');
-  ok('delivered: return deadline shown, return button available', /You can return this order until/.test(await dp.locator('.trk-card:has(h3:text("Returns"))').textContent()) && await dp.locator('a:has-text("Return or report")').count() === 1);
+  ok('delivered: return deadline shown, return button available', /You can return this order until/.test(await dp.locator('.trk-card:has(h3:text("Returns"))').textContent()) && await dp.locator('#retBtn:has-text("Return or report")').count() === 1);
   await fetch(B + '/__age-delivery');
   await dp.reload(); await dp.fill('#fContact', '9876543210'); await dp.click('#lookup button[type=submit]'); await dp.waitForSelector('.trk-hero');
   const lab = dp.locator('text=Return Window Closed').first(); ok('after the deadline: red “Return Window Closed” label', await lab.count() === 1 && /rgb\(179, 38, 30\)/.test(await lab.evaluate((e) => getComputedStyle(e).color)));

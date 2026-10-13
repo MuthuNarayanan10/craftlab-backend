@@ -34,7 +34,12 @@ const settingsSchema = new mongoose.Schema({
   autoCreateShipment: { type: Boolean, default: false },
   defaultCourierProvider: { type: String, default: 'manual' },
   // Notifications
+  welcomeOfferEnabled: { type: Boolean, default: true },   // scratch-card popup for first-time visitors
+  welcomeOfferPercent: { type: Number, default: 5 },
+  welcomeOfferCode: { type: String, default: 'WELCOME5' },
+  welcomeOfferMinOrder: { type: Number, default: 0 },
   notifyEmailEnabled: { type: Boolean, default: true },
+  emailLevel: { type: String, enum: ['essential', 'all'], default: 'essential' }, // essential = order confirmation, shipping/tracking, cancellations, returns & refunds only
   notifyWhatsappEnabled: { type: Boolean, default: false },
   // Returns
   autoApproveReturns: { type: Boolean, default: false },

@@ -41,12 +41,54 @@ router.get('/', async (req, res) => {
   res.json({ orders: docs.map(listItem), total, page, pages: Math.ceil(total / limit) || 1, counts: Object.fromEntries(byStatus.map((s) => [s._id, s.n])) });
 });
 
+// POST /api/admin/orders/manual — the owner records an order taken by phone / WhatsApp / in person.
+// body: { customer:{name,phone,email}, address:{line1,line2,city,state,pincode}, items:[{productId,qty}], shipping, discount, payment:'cod'|'paid', paymentNote, deliveryMethod? }
+router.post('/manual', async (req, res) => {
+  const Product = require('../models/Product'); const generateOrderNumber = require('../utils/generateOrderNumber');
+  const reservations = require('../services/reservations'); const DeliveryMethod = require('../models/DeliveryMethod'); const { snapshot, estimatedDate } = require('../utils/delivery');
+  const { finalizeCodOrder, confirmPayment } = require('../services/orderService'); const { captureGuest } = require('../services/guestCapture');
+  const b = req.body || {}, c = b.customer || {}, a = b.address || {};
+  const d = String(c.phone || '').replace(/\D/g, ''), t = d.length > 10 ? d.slice(-10) : d;
+  if (!String(c.name || '').trim() || !/^[6-9]\d{9}$/.test(t)) return res.status(400).json({ error: 'Enter the customer’s name and a valid 10-digit mobile number' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(c.email || ''))) return res.status(400).json({ error: 'Enter the customer’s email (the invoice is sent there)' });
+  if (!a.line1 || !a.city || !a.state || !/^\d{6}$/.test(String(a.pincode || ''))) return res.status(400).json({ error: 'Enter a complete address with a 6-digit PIN code' });
+  const wanted = Array.isArray(b.items) ? b.items.filter((i) => i && i.productId && parseInt(i.qty, 10) >= 1) : [];
+  if (!wanted.length) return res.status(400).json({ error: 'Add at least one product' });
+  const items = [], held = [];
+  const undo = async () => { for (const h of held) await reservations.releaseUnits(h.id, h.qty).catch(() => {}); };
+  for (const w of wanted) {
+    const p = await Product.findById(w.productId); const qty = parseInt(w.qty, 10);
+    if (!p || p.status !== 'active') { await undo(); return res.status(400).json({ error: 'One of the products is no longer available' }); }
+    if (!(await reservations.reserveUnits(p._id, qty))) { await undo(); return res.status(409).json({ error: `Not enough stock for ${p.name}` }); }
+    held.push({ id: p._id, qty }); items.push({ product: p._id, name: p.name, sku: p.sku, price: p.price, qty, image: p.images?.[0] || '' });
+  }
+  const subtotal = items.reduce((n, i) => n + i.price * i.qty, 0), shipping = Math.max(0, Math.round(Number(b.shipping) || 0)), discount = Math.min(subtotal, Math.max(0, Math.round(Number(b.discount) || 0)));
+  const methods = await DeliveryMethod.listAll(); const method = methods.find((m) => m.key === b.deliveryMethod) || methods.find((m) => m.enabled);
+  const paid = b.payment === 'paid';
+  try {
+    const order = await Order.create({
+      orderNumber: await generateOrderNumber(), customerId: null,
+      customer: { name: String(c.name).trim().slice(0, 100), phone: '+91' + t, email: String(c.email).toLowerCase() },
+      address: { line1: String(a.line1).slice(0, 200), line2: String(a.line2 || '').slice(0, 200), city: String(a.city).slice(0, 80), state: String(a.state).slice(0, 80), pincode: a.pincode, country: 'India' },
+      items, subtotal, shipping, discount, total: subtotal - discount + shipping,
+      payment: { method: paid ? '' : 'cod' }, delivery: { method: method ? snapshot(method, subtotal - discount) : {} }, estimatedDelivery: method ? estimatedDate(method) : undefined,
+      attribution: { source: 'admin', medium: 'manual' }, events: [{ label: 'Order placed', stage: 'placed', actor: req.admin.email, type: 'placed' }],
+    });
+    await captureGuest(order.customer).catch(() => {});
+    if (paid) await confirmPayment(order.id, { paymentId: 'manual-' + Date.now(), method: String(b.paymentNote || 'recorded by admin').slice(0, 40), via: 'admin', actor: req.admin.email });
+    else await finalizeCodOrder(order);
+    await audit({ action: 'order.manual_created', actor: req.admin.email, entity: 'order', entityId: order.id, summary: `Manual order ${order.orderNumber} — ₹${order.total} (${paid ? 'paid' : 'COD'})`, req });
+    res.status(201).json({ id: order.id, orderNumber: order.orderNumber, total: order.total });
+  } catch (e) { await undo(); res.status(400).json({ error: e.message || 'Could not create the order' }); }
+});
+
 // GET /api/admin/orders/:id — everything, including the complete timeline
 router.get('/:id', async (req, res) => {
   const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   const o = order.toJSON(); const ctx0 = await require('../services/trackLink').loadCtx();
-  res.json({ ...o, allowedNext: allowedNext(o).filter((s) => s !== 'Refunded'), journey: require('../services/trackLink').finish(buildJourney(o), o, ctx0), returnWindowDays: ctx0.days });
+  const courierApi = !!(await require('../models/Integration').exists({ provider: { $in: ['shiprocket', 'delhivery'] }, enabled: true })) || !!require('../utils/courier/env').courierFromEnv('shiprocket') || !!require('../utils/courier/env').courierFromEnv('delhivery');
+  res.json({ ...o, courierApi, allowedNext: allowedNext(o).filter((s) => s !== 'Refunded'), journey: require('../services/trackLink').finish(buildJourney(o), o, ctx0), returnWindowDays: ctx0.days });
 });
 
 // PUT /api/admin/orders/:id/status
@@ -64,10 +106,12 @@ router.put('/:id/status', async (req, res) => {
 
 // PUT /api/admin/orders/:id/delivery — courier details (tracking number) OR, for manual delivery, who is delivering and when
 router.put('/:id/delivery', async (req, res) => {
-  const { partner, trackingId, trackingUrl, dispatchDate, expectedDelivery, notes, assignee, scheduledFor } = req.body;
+  const { partner, trackingId, trackingUrl, dispatchDate, expectedDelivery, notes, assignee, scheduledFor, notifyCustomer } = req.body;
   const order = await Order.findById(req.params.id);
   if (!order) return res.status(404).json({ error: 'Order not found' });
   const before = { partner: order.delivery.partner, trackingId: order.delivery.trackingId, assignee: order.delivery.assignee?.name };
+  const sig = () => JSON.stringify([order.delivery.partner, order.delivery.trackingId, order.delivery.trackingUrl, order.delivery.dispatchDate && +new Date(order.delivery.dispatchDate), order.delivery.expectedDelivery && +new Date(order.delivery.expectedDelivery), order.delivery.assignee?.name, order.delivery.assignee?.phone, order.delivery.scheduledFor && +new Date(order.delivery.scheduledFor)]);
+  const sigBefore = sig();
   const d = order.delivery;                                       // field by field — the chosen delivery method must never be overwritten
   if (partner !== undefined) d.partner = String(partner).slice(0, 60);
   if (trackingId !== undefined) d.trackingId = String(trackingId).slice(0, 60);
@@ -84,8 +128,14 @@ router.put('/:id/delivery', async (req, res) => {
   }
   if (trackingId && trackingId !== before.trackingId) pushEvent(order, { label: 'Tracking number added', actor: req.admin.email, note: `${partner || 'Courier'} · ${trackingId}`, type: 'tracking' });
   await order.save();
+  const sigAfter = sig(); let notified = false;
+  const hasInfo = order.delivery.trackingId || order.delivery.partner || order.delivery.assignee?.name || order.delivery.expectedDelivery || order.delivery.scheduledFor;
+  if (notifyCustomer !== false && sigAfter !== sigBefore && hasInfo && !['Cancelled', 'Refunded'].includes(order.orderStatus)) {
+    notified = true; pushEvent(order, { label: 'Delivery details sent to customer', actor: 'system', public: false, type: 'tracking_notice' }); await order.save();
+    require('../services/notifier').notifyOrder('tracking_update', { order, rev: require('crypto').createHash('sha1').update(sigAfter).digest('hex').slice(0, 10) });
+  }
   await audit({ action: 'order.delivery_updated', actor: req.admin.email, entity: 'order', entityId: order.id, summary: `Delivery details updated for ${order.orderNumber}`, before, after: { partner: d.partner, trackingId: d.trackingId, assignee: d.assignee?.name }, req });
-  res.json(order);
+  res.json({ ...order.toJSON(), notified });
 });
 
 // POST /api/admin/orders/:id/note — internal note (default) or a message visible on the customer's tracking page

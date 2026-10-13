@@ -49,4 +49,13 @@ router.put('/:id', async (req, res) => {
   if (changes.length) await audit({ action: 'team.updated', actor: req.admin.email, entity: 'admin', entityId: a.id, summary: `${a.email}: ${changes.join(', ')}`, before, after: { role: a.role, active: a.active }, req });
   res.json(view(a));
 });
+
+// DELETE /api/admin/team/:id — owner only; never yourself, never the last owner
+router.delete('/:id', async (req, res) => {
+  const a = await Admin.findById(req.params.id); if (!a) return res.status(404).json({ error: 'Team member not found' });
+  if (String(a.id) === String(req.admin.id)) return res.status(400).json({ error: 'You can’t delete yourself.' });
+  if (a.role === 'ADMIN' && a.active && (await activeOwners()) <= 1) return res.status(400).json({ error: 'Keep at least one active owner (ADMIN).' });
+  await a.deleteOne(); await audit({ action: 'team.deleted', actor: req.admin.email, entity: 'team', entityId: a.id, summary: `Team member removed: ${a.email}`, req });
+  res.json({ ok: true });
+});
 module.exports = router;

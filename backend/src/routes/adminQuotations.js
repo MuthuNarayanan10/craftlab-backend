@@ -43,4 +43,11 @@ router.post('/:id/send-email', async (req, res) => {
   res.json({ sent: true, to: supplier.email });
 });
 
+
+// DELETE /api/admin/quotations/:id
+router.delete('/:id', require('../middleware/adminAuth').requireRole('ADMIN'), async (req, res) => {
+  const q = await Quotation.findByIdAndDelete(req.params.id); if (!q) return res.status(404).json({ error: 'Quotation not found' });
+  await logAction({ action: 'quotation.deleted', actor: req.admin.email, entity: 'quotation', entityId: q.id, summary: `Quotation ${q.quotationNumber} deleted`, req });
+  res.json({ ok: true });
+});
 module.exports = router;

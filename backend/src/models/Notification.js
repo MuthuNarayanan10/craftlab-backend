@@ -1,10 +1,11 @@
 const mongoose = require('mongoose');
 
 const notificationSchema = new mongoose.Schema({
-  type: { type: String, enum: ['new_order', 'low_stock', 'payment_failed', 'return_requested', 'contact_message', 'support_request', 'reservation_expired'], required: true },
+  type: { type: String, enum: ['new_order', 'low_stock', 'payment_failed', 'return_requested', 'contact_message', 'support_request', 'reservation_expired', 'review_submitted', 'support_reply', 'guest_return', 'otp_failed', 'tracking_update'], required: true },
   message: { type: String, required: true },
   meta: { type: mongoose.Schema.Types.Mixed, default: {} },
   read: { type: Boolean, default: false },
+  archived: { type: Boolean, default: false },   // dismissed from the bell with × — kept in Notifications → Alerts archive
 }, { timestamps: true });
 
 notificationSchema.methods.toJSON = function () {

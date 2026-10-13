@@ -5,4 +5,6 @@ router.get('/', async (req, res) => {
   const subs = await Subscriber.find().sort({ createdAt: -1 }).limit(1000);
   res.json(subs.map(s => ({ id: s.id, email: s.email, createdAt: s.createdAt })));
 });
+
+router.delete('/:id', require('../middleware/adminAuth').requireRole('ADMIN'), async (req, res) => { await Subscriber.findByIdAndDelete(req.params.id); res.json({ ok: true }); });
 module.exports = router;

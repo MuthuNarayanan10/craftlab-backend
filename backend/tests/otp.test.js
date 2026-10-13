@@ -110,3 +110,12 @@ test('Brevo + ZeptoMail senders: request shape, region, token format, error surf
   await zeptomailSender({ sendMailToken: 'Zoho-enczapikey already', senderEmail: 's@x.in', region: 'com', fetchImpl: fx() }).send('c@x.com', '1'); assert.equal(calls.at(-1).url, 'https://api.zeptomail.com/v1.1/email'); assert.equal(calls.at(-1).init.headers.Authorization, 'Zoho-enczapikey already', 'token prefix not doubled');
   await assert.rejects(zeptomailSender({ sendMailToken: 't', senderEmail: 's@x.in', fetchImpl: fx(false, { error: { message: 'Invalid token' } }) }).send('c@x.com', '1'), /Invalid token/);
 });
+
+test('a failed delivery does not count towards the cool-down or hourly cap (provider hiccups must not lock customers out)', async () => {
+  let fail = true; const rows = []; let n = 0;
+  const store = { remove: async (id) => { rows.splice(rows.findIndex((r) => r.id === id), 1); }, latest: async (p) => rows.filter((r) => r.phone === p).slice(-1)[0] || null, countRecent: async ({ phone }) => rows.filter((r) => r.phone === phone).length,
+    create: async (d) => { const r = { id: ++n, consumed: false, ...d }; rows.push(r); return r; }, consume: async () => {}, listActive: async () => [], incrementAttempts: async () => 1 };
+  const svc = createOtpService({ store, sender: { id: 'x', send: async () => { if (fail) throw new Error('boom'); } }, hmacSecret: 'h' });
+  for (let i = 0; i < 6; i++) await assert.rejects(svc.send('9876543210'), (e) => e.code === 'SEND_FAILED');
+  fail = false; const r = await svc.send('9876543210'); assert.ok(r.phone, 'the next try goes through immediately');
+});

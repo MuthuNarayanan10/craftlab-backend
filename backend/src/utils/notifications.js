@@ -9,7 +9,26 @@ const track = (o) => `${SITE()}/order-tracking.html?order=${encodeURIComponent(o
 const manual = (o) => o.delivery?.method?.type === 'manual';
 const inr = (n) => '₹' + Number(n).toLocaleString('en-IN');
 
+/** "essential" mode keeps the inbox quiet: only what a customer truly needs. (Invoice and OTP emails are separate and always sent.) */
+const ESSENTIAL = new Set(['order_placed', 'order_shipped', 'tracking_update', 'order_cancelled', 'return_approved', 'return_rejected', 'refund_initiated', 'refund_completed']);
+const dtf = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+function trackingLines(o) {
+  const d = o.delivery || {}, L = [];
+  if (d.manualId) L.push(`Delivery ID: ${d.manualId}`);
+  if (manual(o)) {
+    if (d.assignee?.name) L.push(`Delivery person: ${d.assignee.name}${d.assignee.phone ? ' (' + d.assignee.phone + ')' : ''}`);
+    if (d.scheduledFor) L.push(`Planned delivery: ${new Date(d.scheduledFor).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}`);
+  } else {
+    if (d.partner) L.push(`Courier: ${d.partner}`);
+    if (d.trackingId) L.push(`Tracking / AWB number: ${d.trackingId}`);
+    if (d.dispatchDate) L.push(`Dispatched on: ${dtf(d.dispatchDate)}`);
+    if (d.expectedDelivery) L.push(`Expected delivery: ${dtf(d.expectedDelivery)}`);
+  }
+  return L;
+}
+
 const EVENTS = {
+  tracking_update:   { title: 'Delivery update',        text: ({ order: o }) => { const L = trackingLines(o); return `Hi ${first(o)}, here are the latest delivery details for your order ${o.orderNumber}:\n${L.join('\n')}${o.delivery?.trackingUrl ? '\nTrack with the courier: ' + o.delivery.trackingUrl : ''}`; } },
   order_placed:      { title: 'Order confirmed',        text: ({ order: o }) => `Hi ${first(o)}, thank you for your Craft Lab order ${o.orderNumber} (${inr(o.total)}).${o.payment?.method === 'cod' ? ' Please keep the amount ready for delivery.' : ''}` },
   payment_confirmed: { title: 'Payment received',       text: ({ order: o }) => `Hi ${first(o)}, we've received your payment of ${inr(o.total)} for order ${o.orderNumber}. We're getting it ready.` },
   order_packed:      { title: 'Order packed',           text: ({ order: o }) => manual(o) ? `Hi ${first(o)}, your order ${o.orderNumber} is packed and ready for our delivery team.` : `Hi ${first(o)}, your order ${o.orderNumber} is packed and waiting for the courier.` },
@@ -29,14 +48,14 @@ function buildMessage(eventKey, ctx) {
   if (!ev) throw new Error(`Unknown notification event "${eventKey}"`);
   const text = ev.text(ctx), url = track(ctx.order);
   const html = `<div style="font-family:system-ui,Arial,sans-serif;max-width:520px;margin:0 auto;color:#2A2620">
-    <h2 style="color:#544C35;font-weight:500">${ev.title}</h2><p style="line-height:1.6">${text.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>
+    <h2 style="color:#544C35;font-weight:500">${ev.title}</h2><p style="line-height:1.6">${text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')}</p>
     <p><a href="${url}" style="display:inline-block;background:#1b1915;color:#fff;padding:12px 22px;border-radius:6px;text-decoration:none;font-weight:600">Track your order</a></p>
     <p style="color:#6B6255;font-size:13px">Questions? Reply to this email or write to care@thecraftlab.co.in</p></div>`;
   return { title: ev.title, subject: `${ev.title} — ${ctx.order.orderNumber} | The Craft Lab`, text: `${text}\nTrack: ${url}`, html, trackUrl: url };
 }
 
 function dedupeKey(eventKey, ctx, channel) {
-  return [eventKey, ctx.order.orderNumber, ctx.ret?.id || ctx.ret?._id || '', ctx.refund?.refundId || '', channel].join(':');
+  return [eventKey, ctx.order.orderNumber, ctx.ret?.id || ctx.ret?._id || '', ctx.refund?.refundId || '', ctx.rev || '', channel].join(':');
 }
 
 /** channels: { email, whatsapp } (each optional); logStore: { claim(key, doc), update(id, patch), findFailed(limit) } */
@@ -52,7 +71,7 @@ function createNotifier({ logStore, channels, enabled }) {
     const msg = buildMessage(eventKey, ctx);
     const out = {};
     for (const channel of Object.keys(channels)) {
-      if (!enabled(channel)) continue;
+      if (!enabled(channel, eventKey)) continue;
       const to = channel === 'email' ? ctx.order.customer.email : ctx.order.customer.phone;
       if (!to) continue;
       const log = await logStore.claim(dedupeKey(eventKey, ctx, channel), { channel, event: eventKey, to, orderNumber: ctx.order.orderNumber, status: 'pending', payload: { subject: msg.subject, html: msg.html, text: msg.text, title: msg.title }, attempts: 0 });
@@ -65,7 +84,7 @@ function createNotifier({ logStore, channels, enabled }) {
   async function retryFailed(limit = 25) {
     let n = 0;
     for (const log of await logStore.findFailed(limit)) {
-      if (!channels[log.channel] || !enabled(log.channel)) continue;
+      if (!channels[log.channel] || !enabled(log.channel, log.event)) continue;
       const r = await deliver({ id: log.id, order: null }, log.channel, log.payload, log.to);
       if (r === 'sent') n++;
     }
@@ -92,4 +111,4 @@ function whatsappCloudChannel({ phoneNumberId, accessToken, templateName, langua
   };
 }
 
-module.exports = { EVENTS, buildMessage, dedupeKey, createNotifier, emailChannel, whatsappCloudChannel };
+module.exports = { ESSENTIAL, trackingLines, EVENTS, buildMessage, dedupeKey, createNotifier, emailChannel, whatsappCloudChannel };

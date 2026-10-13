@@ -24,23 +24,21 @@ function windowState(order, settings) {
 }
 
 // GET /api/returns/eligible/:orderId — which lines can still be returned, and for how long
-router.get('/eligible/:orderId', requireCustomer, async (req, res) => {
-  const order = await ownedOrder(req, req.params.orderId);
-  if (!order) return res.status(404).json({ error: 'Order not found on your account' });
+const eligibleHandler = async (req, res) => {
+  const order = req.order;
   const settings = await getSettings();
   if (order.orderStatus !== 'Delivered') return res.json({ eligible: false, reason: 'Returns open once your order is delivered.' });
   const win = windowState(order, settings);
   if (!win.open) return res.json({ eligible: false, reason: `The ${settings.returnWindowDays}-day return window for this order has closed. You can still contact support.`, window: win });
   const lines = eligibleQuantities(order, await Return.find({ order: order._id }));
   res.json({ eligible: lines.some((l) => l.eligible > 0), lines, window: win, reasons: REASONS });
-});
+};
 
 // POST /api/returns
-router.post('/', requireCustomer, async (req, res) => {
-  const { orderId, items, reason, comments, resolution, images } = req.body;
-  if (!orderId || !REASONS.includes(reason)) return res.status(400).json({ error: 'Please choose a reason for the return' });
-  const order = await ownedOrder(req, orderId);
-  if (!order) return res.status(404).json({ error: 'Order not found on your account' });
+const createHandler = async (req, res) => {
+  const { items, reason, comments, resolution, images } = req.body;
+  if (!REASONS.includes(reason)) return res.status(400).json({ error: 'Please choose a reason for the return' });
+  const order = req.order;
   if (order.orderStatus !== 'Delivered') return res.status(400).json({ error: 'Returns can only be requested for delivered orders' });
   const settings = await getSettings();
   const win = windowState(order, settings);
@@ -65,7 +63,7 @@ router.post('/', requireCustomer, async (req, res) => {
     cleanImages = images;
   }
   const ret = await Return.create({
-    order: order._id, orderNumber: order.orderNumber, customerId: req.customer.id,
+    order: order._id, orderNumber: order.orderNumber, customerId: req.customer ? req.customer.id : (order.customerId || undefined),
     customerEmail: order.customer.email, customerPhone: order.customer.phone, customerName: order.customer.name,
     items: chosen, amount: refundableAmount(order, chosen), reason: String(reason), comments: String(comments || '').slice(0, 1000),
     resolution: ['Refund', 'Replacement', 'Other'].includes(resolution) ? resolution : 'Refund', images: cleanImages, imageCount: cleanImages.length,
@@ -76,9 +74,27 @@ router.post('/', requireCustomer, async (req, res) => {
     notifyOrder('return_approved', { order, ret });
   }
   await createNotification('return_requested', `Return requested for ${order.orderNumber} — ${reason}${cleanImages.length ? ` (${cleanImages.length} photo${cleanImages.length > 1 ? 's' : ''})` : ''}`, { orderNumber: order.orderNumber });
-  await audit({ action: 'return.requested', actor: 'customer', entity: 'return', entityId: ret.id, summary: `Return requested for ${order.orderNumber}: ${reason}`, req });
+  await audit({ action: 'return.requested', actor: req.customer ? 'customer' : 'guest', entity: 'return', entityId: ret.id, summary: `Return requested for ${order.orderNumber}: ${reason}`, req });
   res.status(201).json({ id: ret.id, status: ret.status, amount: ret.amount });
-});
+};
+
+// ---- logged-in customers ----
+const loadOwned = async (req, res, next) => { const id = req.params.orderId || req.body.orderId; const order = id && /^[a-f0-9]{24}$/i.test(String(id)) ? await ownedOrder(req, id) : null; if (!order) return res.status(404).json({ error: 'Order not found on your account' }); req.order = order; next(); };
+router.get('/eligible/:orderId', requireCustomer, loadOwned, eligibleHandler);
+router.post('/', requireCustomer, loadOwned, createHandler);
+
+// ---- guests: the order number AND the email/phone used on it (same proof as order tracking) ----
+const loadGuest = async (req, res, next) => {
+  const src = { ...req.query, ...(req.body || {}) };
+  const orderNumber = String(src.orderNumber || '').trim().toUpperCase().replace(/^#/, '').replace(/\s+/g, '');
+  const email = String(src.email || '').trim().toLowerCase(), phone = String(src.phone || '').replace(/\D/g, '').slice(-10);
+  if (!orderNumber || (!email && phone.length !== 10)) return res.status(400).json({ error: 'Enter your order number and the email or mobile used for the order' });
+  const order = await Order.findOne({ orderNumber: { $in: [orderNumber, orderNumber.replace(/-/g, '')] }, ...(email ? { 'customer.email': email } : { 'customer.phone': { $regex: phone + '$' } }) });
+  if (!order) return res.status(404).json({ error: 'No order found matching those details' });
+  req.order = order; next();
+};
+router.get('/guest/eligible', loadGuest, eligibleHandler);
+router.post('/guest', loadGuest, createHandler);
 
 // GET /api/returns/mine — this customer's requests (no photos), with the simplified journey
 router.get('/mine', requireCustomer, async (req, res) => {

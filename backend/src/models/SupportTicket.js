@@ -3,6 +3,7 @@ const STATUSES = ['New', 'Open', 'InProgress', 'WaitingCustomer', 'Resolved', 'C
 const messageSchema = new mongoose.Schema({
   from: { type: String, enum: ['customer', 'admin', 'note'], required: true }, via: { type: String, default: '' }, // via: 'email' when it arrived as a reply to our mail
   // 'note' = internal, never shown to the customer
+  attachments: { type: [{ name: String, data: String, _id: false }], default: [] },
   text: { type: String, required: true, maxlength: 4000 }, by: { type: String, default: '' }, at: { type: Date, default: Date.now },
 }, { _id: false });
 const ticketSchema = new mongoose.Schema({

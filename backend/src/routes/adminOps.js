@@ -27,8 +27,8 @@ router.get('/audit', requireRole('ADMIN'), async (req, res) => {
 
 // GET /api/admin/notification-log?status=&page=   ·   POST /api/admin/notification-log/retry
 router.get('/notification-log', async (req, res) => {
-  const page = Math.max(1, parseInt(req.query.page) || 1), limit = 40;
-  const f = req.query.status ? { status: req.query.status } : {};
+  const page = Math.max(1, parseInt(req.query.page) || 1), limit = Math.min(200, parseInt(req.query.limit) || 40);
+  const f = req.query.status ? { status: req.query.status } : {}; if (req.query.event) f.event = String(req.query.event);
   const [rows, total, counts] = await Promise.all([NotificationLog.find(f).select('-payload.html').sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit), NotificationLog.countDocuments(f), NotificationLog.aggregate([{ $group: { _id: '$status', n: { $sum: 1 } } }])]);
   res.json({ logs: rows.map((r) => r.toObject()), total, page, pages: Math.ceil(total / limit) || 1, counts: Object.fromEntries(counts.map((c) => [c._id, c.n])) });
 });

@@ -23,6 +23,7 @@ router.put('/:id', async (req, res) => {
 
 // DELETE /api/admin/suppliers/:id
 router.delete('/:id', async (req, res) => {
+  if (req.query.hard) { await Supplier.findByIdAndDelete(req.params.id); return res.json({ deleted: true }); }
   await Supplier.findByIdAndUpdate(req.params.id, { status: 'inactive' });
   res.json({ deactivated: true });
 });

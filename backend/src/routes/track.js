@@ -3,6 +3,8 @@ const router = express.Router();
 const Order = require('../models/Order');
 const { buildJourney } = require('../utils/orderStatus');
 const { getSettings } = require('../models/Settings');
+const Return = require('../models/Return');
+const { normalize: normRet, LABEL: RET_LABEL } = require('../utils/returnStatus');
 const { loadCtx, finish } = require('../services/trackLink');
 const { invoiceHtml, sampleOrder } = require('../utils/invoiceHtml');
 const businessOf = async () => { const s = await getSettings(); return { legalName: s.legalName || s.businessName, businessName: s.businessName, gstin: s.gstin, pan: s.pan, address: s.address, city: s.city, state: s.state, pincode: s.pincode, phone: s.phone, email: s.email, hsn: s.hsnCode || '' }; };
@@ -27,14 +29,16 @@ router.get('/', async (req, res) => {
   if (!order) return res.status(404).json({ error: 'No order found matching those details' });
 
   const o = order.toJSON(); const ctx = await loadCtx();
+  const rets = await Return.find({ order: order._id }).select('status createdAt amount').sort({ createdAt: -1 });
   res.json({
     orderNumber: o.orderNumber, createdAt: o.createdAt, total: o.total, paymentStatus: o.paymentStatus, orderStatus: o.orderStatus,
     items: o.items.map((i) => ({ name: i.name, qty: i.qty, image: i.image })),
     city: o.address.city,
     wallet: { pointsValue: o.wallet?.pointsValue || 0, giftTotal: o.wallet?.giftTotal || 0 },
     journey: finish(buildJourney(o), o, ctx),
+    returns: rets.map((r) => ({ status: normRet(r.status), label: RET_LABEL[normRet(r.status)] || r.status, at: r.createdAt, amount: r.amount })),
     // kept for older clients
-    delivery: { partner: o.shipment?.courierName || o.delivery?.partner || '', trackingId: o.shipment?.awb || o.delivery?.trackingId || '' },
+    delivery: { manualId: o.delivery?.manualId || 'MD-' + o.orderNumber, partner: o.shipment?.courierName || o.delivery?.partner || '', trackingId: o.shipment?.awb || o.delivery?.trackingId || '' },
   });
 });
 

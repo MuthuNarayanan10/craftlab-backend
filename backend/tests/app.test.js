@@ -55,6 +55,10 @@ test('CORS: production only allows the listed origins', async () => {
   process.env.NODE_ENV = 'production'; process.env.CORS_ORIGIN = 'https://thecraftlab.co.in,https://www.thecraftlab.co.in';
   const prod = createApp();
   assert.equal((await request(prod).get('/api/health').set('Origin', 'https://thecraftlab.co.in')).headers['access-control-allow-origin'], 'https://thecraftlab.co.in');
+  process.env.CORS_ORIGIN = 'https://thecraftlab.co.in,https://*.netlify.app'; const prod2 = createApp();
+  assert.equal((await request(prod2).get('/api/health').set('Origin', 'https://craftlab-test.netlify.app')).headers['access-control-allow-origin'], 'https://craftlab-test.netlify.app', 'a * entry matches one sub-domain');
+  assert.equal((await request(prod2).get('/api/health').set('Origin', 'https://x.netlify.app.evil.com')).status, 403);
+  process.env.CORS_ORIGIN = 'https://thecraftlab.co.in,https://www.thecraftlab.co.in';
   const evil = await request(prod).get('/api/health').set('Origin', 'https://evil.example'); assert.equal(evil.status, 403); assert.equal(evil.headers['access-control-allow-origin'], undefined);
   assert.notEqual((await request(prod).get('/api/health')).status, 403, 'no Origin header (webhooks, uptime checks) is fine');
   process.env.NODE_ENV = prev.e; if (prev.c === undefined) delete process.env.CORS_ORIGIN; else process.env.CORS_ORIGIN = prev.c;

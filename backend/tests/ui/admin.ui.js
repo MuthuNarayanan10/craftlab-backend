@@ -59,9 +59,14 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|api\.qrserver\.com/;
   await page.fill('#noteText', 'Customer asked for evening delivery'); await page.click('#noteInternal'); await toast(); await page.waitForTimeout(500); ok('internal note appears on the timeline, marked internal', /evening delivery/.test(await page.locator('.tl').textContent()) && await page.locator('.tl li.internal').count() >= 1);
   await page.selectOption('#mStatus', 'Delivered'); await page.click('#saveStatus'); await toast(); await page.waitForTimeout(600);
   ok('marking Delivered collects the COD cash and closes the order', (await api('/admin/orders/' + oid, {}, owner)).body.paymentStatus === 'Paid');
-  await page.keyboard.press('Escape'); await page.fill('#searchBox', `${FY}CL001`); await page.waitForTimeout(900); await page.click('[data-manage]'); await page.waitForSelector('#shipCreate');
-  ok('courier order: booking controls present', await page.locator('#shipCreate').count() === 1 && await page.locator('#asName').count() === 0);
-  await page.waitForSelector('#adminToast:not(.show)'); await page.click('#shipCreate'); const tt = await toast(); ok('booking without a connected courier explains what to do (no crash)', /Integrations/.test(tt), tt);
+  await page.keyboard.press('Escape'); await page.fill('#searchBox', `${FY}CL001`); await page.waitForTimeout(900); await page.click('[data-manage]'); await page.waitForSelector('#saveCourierManual');
+  ok('courier order (no courier service connected): only manual tracking fields — no booking buttons', await page.locator('#shipCreate').count() === 0 && await page.locator('#dTracking').count() === 1 && await page.locator('#asName').count() === 0);
+  await page.keyboard.press('Escape');
+  const cid = (await api('/admin/orders?q=' + FY + 'CL001', {}, owner)).body.orders[0].id;
+  await api('/admin/integrations/shiprocket', { method: 'PUT', body: { enabled: true, secrets: { email: 'a@b.com', password: 'x' }, config: {} } }, owner);
+  await page.fill('#searchBox', ''); await page.fill('#searchBox', `${FY}CL001`); await page.waitForTimeout(900); await page.click('[data-manage]'); await page.waitForSelector('#shipCreate');
+  ok('once a courier service is connected the booking controls appear', await page.locator('#shipCreate').count() === 1);
+  await page.waitForSelector('#adminToast:not(.show)'); await page.click('#shipCreate'); await toast(); await api('/admin/integrations/shiprocket', { method: 'PUT', body: { enabled: false } }, owner);
   await page.keyboard.press('Escape');
 
   /* ---- RETURNS: customer asks, admin walks it to a refund ---- */

@@ -37,7 +37,7 @@ const BLOCK = /fonts\.(googleapis|gstatic)\.com|gstatic\.com\/firebasejs|api\.qr
   ok('in-transit headline', /on its way/i.test(await page.locator('.trk-hero h2').textContent())); await page.click('#copyAwb'); ok('tracking number can be copied', (await page.evaluate(() => navigator.clipboard.readText())) === 'DL778899');
   await page.screenshot({ path: SHOTS + '/11-track-courier.png', fullPage: true });
   await track(page, delivered, 'muthu@example.com'); ok('delivered: every stage done, 100%', (await page.locator('.step.done').count()) === 8 && /Delivered/.test(await page.locator('.trk-hero h2').textContent()) && (await page.locator('#bar').evaluate((e) => parseFloat(e.style.width))) === 100);
-  ok('delivered orders offer the return path', await page.locator('a:has-text("Return or report a problem")').count() === 1); await ctx.close();
+  ok('delivered orders offer the return path', await page.locator('#retBtn:has-text("Return or report a problem")').count() === 1); await ctx.close();
   ({ ctx, page } = await newPage({ width: 390, height: 844 })); await track(page, manualOut, 'muthu@example.com');
   ok('mobile: tracking page fits the screen (no sideways scroll)', !(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)));
   ok('mobile: stepper is a vertical list', await page.locator('.step').first().evaluate((e) => getComputedStyle(e).display) === 'grid');

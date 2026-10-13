@@ -40,14 +40,15 @@ function createOtpService({ store, sender, hmacSecret, channel = 'phone', now = 
       throw new OtpError('COOLDOWN', `Please wait ${retryAfterSec}s before requesting another code`, 429, { retryAfterSec });
     }
     const since = new Date(t - 3600e3);
-    if ((await store.countRecent({ phone, since })) >= cfg.maxSendsPerPhoneHour) throw new OtpError('TOO_MANY_PHONE', `You’ve used all 3 resends for this ${what}. Try again in an hour, or continue as a guest and track your order with its order number.`, 429);
+    if ((await store.countRecent({ phone, since })) >= cfg.maxSendsPerPhoneHour) throw new OtpError('TOO_MANY_PHONE', `You’ve requested the maximum number of codes for this ${what}. Try again in an hour, or continue as a guest and track your order with its order number.`, 429);
     if (ip && (await store.countRecent({ ip, since })) >= cfg.maxSendsPerIpHour) throw new OtpError('TOO_MANY_IP', 'Too many requests from this network. Please try again later.', 429);
 
     const code = String(crypto.randomInt(0, 10 ** cfg.length)).padStart(cfg.length, '0');
     // earlier codes stay valid until they expire, so a slow email/SMS that lands after a resend still works
     const rec = await store.create({ phone, codeHash: hash(phone, code), expiresAt: new Date(t + cfg.ttlMs), attempts: 0, ip: ip || '', createdAt: new Date(t) });
     try { await sender.send(phone, code); }
-    catch (e) { await store.consume(rec.id); throw new OtpError('SEND_FAILED', 'We couldn’t send the OTP right now. Please try again shortly.', 502, { cause: e.message }); }
+    catch (e) { // a code that was never delivered must not count towards the cool-down / hourly cap, or a provider hiccup would lock the customer out
+      await (store.remove ? store.remove(rec.id) : store.consume(rec.id)); throw new OtpError('SEND_FAILED', 'We couldn’t send the OTP right now. Please try again shortly.', 502, { cause: e.message }); }
 
     return { phone, identifier: phone, expiresInSec: Math.round(cfg.ttlMs / 1000), resendAfterSec: Math.round(cfg.resendCooldownMs / 1000), resendsLeft: Math.max(0, cfg.maxSendsPerPhoneHour - (await store.countRecent({ phone, since }))), devCode: sender.id === 'dev' && !isProduction ? code : undefined };
   }

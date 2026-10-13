@@ -2,7 +2,7 @@ const NotificationLog = require('../models/NotificationLog');
 const Integration = require('../models/Integration');
 const { getSettings } = require('../models/Settings');
 const { sendEmail } = require('../utils/email');
-const { createNotifier, emailChannel, whatsappCloudChannel } = require('../utils/notifications');
+const { createNotifier, emailChannel, whatsappCloudChannel, ESSENTIAL } = require('../utils/notifications');
 const { logger } = require('../utils/logger');
 
 const logStore = {
@@ -18,7 +18,7 @@ async function build() {
   const wa = await Integration.findOne({ provider: 'whatsapp_cloud', enabled: true });
   let waChannel = { id: 'whatsapp', send: async () => { throw Object.assign(new Error('WhatsApp provider is not configured'), { skipped: true }); } };
   if (wa) { try { const s = wa.getSecrets(); waChannel = whatsappCloudChannel({ phoneNumberId: wa.config.phoneNumberId, accessToken: s.accessToken, templateName: wa.config.templateName, languageCode: wa.config.languageCode || 'en' }); } catch (e) { logger.warn('whatsapp_config_error', { error: e.message }); } }
-  const enabled = (c) => c === 'email' ? settings.notifyEmailEnabled : (settings.notifyWhatsappEnabled && !!wa);
+  const enabled = (c, ev) => c === 'email' ? (settings.notifyEmailEnabled && (settings.emailLevel === 'all' || !ev || ESSENTIAL.has(ev))) : (settings.notifyWhatsappEnabled && !!wa);
   const value = createNotifier({ logStore, channels: { email: emailChannel(sendEmail), whatsapp: waChannel }, enabled });
   cache = { at: Date.now(), value };
   return value;
@@ -27,7 +27,11 @@ const resetNotifierCache = () => { cache = null; };
 
 /** Fire-and-forget: a notification problem must never affect an order. Failures are logged and retried by the background job. */
 function notifyOrder(eventKey, ctx) {
-  return build().then((n) => n.notify(eventKey, ctx)).catch((e) => logger.error('notify_failed', { event: eventKey, order: ctx.order?.orderNumber, error: e.message }));
+  return build().then(async (n) => {
+    // the customer already got courier/AWB details in a "Delivery update" email — don't repeat it as "shipped" in essential mode
+    if (eventKey === 'order_shipped') { const s = await getSettings(); if (s.emailLevel !== 'all' && await NotificationLog.exists({ orderNumber: ctx.order.orderNumber, event: 'tracking_update', status: { $ne: 'failed' } })) return {}; }
+    return n.notify(eventKey, ctx);
+  }).catch((e) => logger.error('notify_failed', { event: eventKey, order: ctx.order?.orderNumber, error: e.message }));
 }
 async function retryFailedNotifications() { return (await build()).retryFailed(); }
 

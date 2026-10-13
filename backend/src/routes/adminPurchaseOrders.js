@@ -126,4 +126,11 @@ router.post('/:id/payments', requireRole('ADMIN'), async (req, res) => {
   await audit({ action: 'po.payment_recorded', actor: req.admin.email, entity: 'purchase_order', entityId: po.id, summary: `${po.poNumber}: paid ₹${amount} to ${po.supplierName} (${po.paymentStatus})`, req });
   res.status(201).json(po);
 });
+
+// DELETE /api/admin/purchase-orders/:id — owner only. Stock already received stays as it is.
+router.delete('/:id', requireRole('ADMIN'), async (req, res) => {
+  const p = await PurchaseOrder.findByIdAndDelete(req.params.id); if (!p) return res.status(404).json({ error: 'Purchase order not found' });
+  await audit({ action: 'po.deleted', actor: req.admin.email, entity: 'purchase-order', entityId: p.id, summary: `Purchase order ${p.poNumber} deleted`, req });
+  res.json({ ok: true });
+});
 module.exports = router;

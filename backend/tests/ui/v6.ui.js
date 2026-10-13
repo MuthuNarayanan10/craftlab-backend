@@ -122,7 +122,7 @@ const FAKE_RZP = `window.Razorpay = class { constructor(o){ this.o = o; window._
   /* ---- API-level: resend limit, earlier code still valid, inbound mail ---- */
   const ph = '9876501234'; const sends = [];
   for (let i = 0; i < 5; i++) { await fetch(B + '/__reset-otp'); sends.push(await api('/customers/otp/send', { method: 'POST', body: { phone: ph, channel: 'phone' } })); }
-  ok('first send + 3 resends allowed, 5th refused with a friendly message', sends.slice(0, 4).every((r) => r.status === 200) && sends[3].body.resendsLeft === 0 && sends[4].status === 429 && /resends/.test(sends[4].body.error), sends.map((r) => r.status).join(','));
+  ok('first send + 3 resends allowed, 5th refused with a friendly message', sends.slice(0, 4).every((r) => r.status === 200) && sends[3].body.resendsLeft === 0 && sends[4].status === 429 && /maximum number of codes/.test(sends[4].body.error), sends.map((r) => r.status).join(','));
   const tk = await api('/support', { method: 'POST', body: { name: 'Reply Tester', email: 'replytest@example.com', subject: 'Hello there', message: 'First message here' } });
   const inbound = await api('/admin/integrations/inbound-mail', {}, owner);
   const hook = await fetch(B + inbound.body.webhookPath, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ items: [{ From: { Address: 'replytest@example.com' }, Subject: 'Re: We’ve received your request ' + tk.body.ticketNumber, RawTextBody: 'My reply by email\n\nOn Mon, someone wrote:\n> quoted text', MessageId: '<m1@x>' }] }) });
